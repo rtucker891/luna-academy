@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import AcademyAuthGate from "./academy-auth";
 
 export const metadata: Metadata = {
   title: "Luna Academy",
@@ -15,7 +16,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AcademyAuthGate>{children}</AcademyAuthGate>
+      </body>
     </html>
   );
 }

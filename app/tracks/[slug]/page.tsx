@@ -2,6 +2,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { directorCurriculum } from "../../director-curriculum";
+import LessonProgress from "../../lesson-progress";
+import DirectorWorkspaceSimulator from "../../director-workspace-simulator";
+import { directorLearningMaterial } from "../../director-learning-material";
 const learningTracks = [
   {
     slug: "director",
@@ -253,10 +256,13 @@ export default async function TrackPage({
             Open each lesson outline, review its objective, and discuss
             the fictional exercise with your trainer. These are draft
             learning outlines—not verified Luna operating procedures or
-            regulatory guidance. Completion and answers are not saved.
+            regulatory guidance. Completion marks are saved only in this browser; exercise answers are not saved.
           </p>
         </div>
-
+<LessonProgress
+  trackSlug={slug}
+  lessonTitles={track.lessons.map((lesson) => lesson.title)}
+/>
         <h2 className="track-lessons-heading">
           Your lessons · {track.lessons.length} outlines
         </h2>
@@ -272,9 +278,72 @@ export default async function TrackPage({
               </summary>
 
               <div className="academy-lesson-body">
+              {slug === "director" &&
+  lesson.title === "Getting started with Luna" && (
+    <DirectorWorkspaceSimulator />
+  )}  
                 <h3>Learning objective</h3>
                 <p>{lesson.objective}</p>
+          {slug === "director" &&
+  directorLearningMaterial[lesson.title] && (
+    <section aria-label="Lesson learning material">
+      {directorLearningMaterial[lesson.title].sections.map(
+        (section) => (
+          <div key={section.heading}>
+            <h3>{section.heading}</h3>
 
+            {section.paragraphs.map((paragraph) => (
+              <p key={paragraph}>{paragraph}</p>
+            ))}
+          </div>
+        ),
+      )}
+
+      <div className="academy-exercise">
+        <h3>Worked example</h3>
+
+        <p>
+          {directorLearningMaterial[lesson.title].workedExample.scenario}
+        </p>
+
+        <ol>
+          {directorLearningMaterial[
+            lesson.title
+          ].workedExample.explanation.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="academy-exercise">
+        <h3>Practice activity</h3>
+
+        <p>
+          {directorLearningMaterial[lesson.title].practice.task}
+        </p>
+
+        <ol>
+          {directorLearningMaterial[
+            lesson.title
+          ].practice.questions.map((question) => (
+            <li key={question}>{question}</li>
+          ))}
+        </ol>
+
+        <details>
+          <summary>Show answer guidance</summary>
+
+          <ol>
+            {directorLearningMaterial[
+              lesson.title
+            ].practice.answerGuide.map((answer) => (
+              <li key={answer}>{answer}</li>
+            ))}
+          </ol>
+        </details>
+      </div>
+    </section>
+  )}
                 <h3>Review checklist</h3>
                 <ul>
                   {lesson.steps.map((step) => (

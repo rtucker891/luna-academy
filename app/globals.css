@@ -382,3 +382,23 @@ a:focus-visible {
     margin: 0 0 6px;
   }
 }
+/* ---------- Academy sign-in ---------- */
+.academy-auth-card { max-width: 420px; margin: 48px auto; padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; text-align: center; }
+.academy-auth-card h1 { margin: 12px 0 4px; }
+.academy-auth-card .brand-icon { margin: 0 auto; }
+.academy-auth-form { display: flex; flex-direction: column; gap: 6px; text-align: left; margin: 16px 0; }
+.academy-auth-form input { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.academy-auth-form button { margin-top: 10px; padding: 11px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+.academy-auth-form button:disabled { opacity: .6; cursor: wait; }
+.academy-auth-secondary { background: none; border: 0; color: var(--primary); font: inherit; cursor: pointer; text-decoration: underline; }
+.academy-auth-warning { font-size: .9rem; color: #9a3412; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; padding: 8px; }
+.academy-auth-error { color: #9a3412; margin: 4px 0; }
+.academy-auth-notice { color: #166534; background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 8px; margin: 4px 0; }
+.academy-account-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 20px; background: #eef3fb; border-bottom: 1px solid var(--border); font-size: .9rem; }
+.academy-account-actions { display: flex; gap: 14px; align-items: center; }
+.academy-account-actions a { color: var(--primary); font-weight: 700; }
+.academy-account-actions button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
+.academy-admin { max-width: 1000px; margin: 0 auto; padding: 24px; }
+.academy-admin table { width: 100%; border-collapse: collapse; background: var(--surface); }
+.academy-admin th, .academy-admin td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: .92rem; }
+.academy-admin button { padding: 6px 12px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font: inherit; cursor: pointer; }

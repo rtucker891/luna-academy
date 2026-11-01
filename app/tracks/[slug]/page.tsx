@@ -2,7 +2,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { directorCurriculum } from "../../director-curriculum";
-import LessonProgress from "../../lesson-progress";
 import DirectorWorkspaceSimulator from "../../director-workspace-simulator";
 import { directorLearningMaterial } from "../../director-learning-material";
 const learningTracks = [
@@ -252,17 +251,15 @@ export default async function TrackPage({
 
         <div className="notice">
           <h2>How to use this track</h2>
-          <p>
-            Open each lesson outline, review its objective, and discuss
-            the fictional exercise with your trainer. These are draft
-            learning outlines—not verified Luna operating procedures or
-            regulatory guidance. Completion marks are saved only in this browser; exercise answers are not saved.
-          </p>
+         <p>
+  Open a lesson and work through its practice simulator. Each
+  simulator uses fictional records and never connects to the
+  real Luna. When you finish a lesson, it is recorded in your
+  Academy training record, which a Director can review.
+</p>
         </div>
-<LessonProgress
-  trackSlug={slug}
-  lessonTitles={track.lessons.map((lesson) => lesson.title)}
-/>
+
+
         <h2 className="track-lessons-heading">
           Your lessons · {track.lessons.length} outlines
         </h2>
@@ -286,7 +283,8 @@ export default async function TrackPage({
                 <p>{lesson.objective}</p>
           {slug === "director" &&
   directorLearningMaterial[lesson.title] && (
-    <section aria-label="Lesson learning material">
+    <details className="academy-lesson">
+  <summary>Background reading: how each part of Luna works</summary>
       {directorLearningMaterial[lesson.title].sections.map(
         (section) => (
           <div key={section.heading}>
@@ -342,8 +340,8 @@ export default async function TrackPage({
           </ol>
         </details>
       </div>
-    </section>
-  )}
+        </details>
+     )}
                 <h3>Review checklist</h3>
                 <ul>
                   {lesson.steps.map((step) => (

@@ -13,9 +13,9 @@ import { useAcademyAuth } from "./academy-auth";
   Everything here runs in the browser with fictional accounts.
 */
 
-type Role = "director" | "bookkeeper" | "assistant_bookkeeper" | "salesman";
+export type Role = "director" | "bookkeeper" | "assistant_bookkeeper" | "salesman";
 
-const roleLabels: Record<Role, string> = {
+export const roleLabels: Record<Role, string> = {
   director: "Director",
   bookkeeper: "Bookkeeper",
   assistant_bookkeeper: "Assistant Bookkeeper",
@@ -23,7 +23,7 @@ const roleLabels: Record<Role, string> = {
 };
 
 // Same order as Luna's main navigation.
-const sections = [
+export const sections = [
   "Home",
   "Luna AI Assistant",
   "Chat History",
@@ -53,7 +53,7 @@ const sections = [
 ];
 
 // Descriptions exactly as written in Luna's workspace.
-const descriptions: Record<string, string> = {
+export const descriptions: Record<string, string> = {
   "Director Approval": "Review purchase orders and authorize supplier returns.",
   "Vendor Receiving": "Record goods received against approved purchase orders.",
   "Supplier Returns": "Prepare, dispatch and settle receipt-linked supplier returns.",
@@ -81,13 +81,13 @@ const descriptions: Record<string, string> = {
 };
 
 
-type IconName =
+export type IconName =
   | "home" | "assistant" | "orders" | "bank" | "invoice" | "vendors" | "customers"
   | "ledger" | "reports" | "calendar" | "mail" | "documents" | "budget" | "products"
   | "settings" | "help" | "bell";
 
 // Icons copied from Luna's workspace so the simulator looks like the real app.
-function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const common = {
     width: size,
     height: size,
@@ -135,7 +135,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   }
 }
 
-const navigationIcons: Record<string, IconName> = {
+export const navigationIcons: Record<string, IconName> = {
   Home: "home",
   "Luna AI Assistant": "assistant",
   "Chat History": "documents",
@@ -165,7 +165,7 @@ const navigationIcons: Record<string, IconName> = {
 };
 
 // The "Accounting Workspace" cards on Luna's Home screen.
-const homeCards: { title: string; description: string; icon: IconName }[] = [
+export const homeCards: { title: string; description: string; icon: IconName }[] = [
   { title: "Customer Orders", description: "Enter orders and track fulfillment", icon: "orders" },
   { title: "Purchase Orders", description: "Create purchase orders and track deliveries", icon: "orders" },
   { title: "Banking", description: "Connect and manage bank accounts", icon: "bank" },
@@ -182,7 +182,7 @@ const homeCards: { title: string; description: string; icon: IconName }[] = [
 ];
 
 // Which Director lesson teaches each section's workflow in depth.
-const coveredIn: Record<string, string> = {
+export const coveredIn: Record<string, string> = {
   "Luna AI Assistant": "Lesson 11",
   "Chat History": "Lesson 11",
   "Luna Task History": "Lesson 11",
@@ -227,7 +227,7 @@ const accountingSections = new Set([
   "Document Center",
 ]);
 
-function canOpenSection(role: Role, section: string) {
+export function canOpenSection(role: Role, section: string) {
   if (role === "director") return true;
   if (role === "salesman") return false; // Salesman uses a separate sales workspace.
   if (!accountingSections.has(section)) return false;
@@ -397,7 +397,7 @@ const missions: Mission[] = [
   },
 ];
 
-const styles = `
+export const simulatorStyles = `
 .lsim { border:1px solid #cbd5e1; border-radius:16px; overflow:hidden; background:#f8fafc; color:#0f172a; margin:16px 0; font-size:15px; font-family:Arial,Helvetica,sans-serif; }
 .lsim-top { background:#0f172a; color:#fff; padding:10px 16px; font-size:13px; letter-spacing:.04em; }
 .lsim-coach { padding:14px 16px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; border-bottom:1px solid #e2e8f0; align-items:start; }
@@ -592,7 +592,7 @@ export default function DirectorWorkspaceSimulator() {
 
   return (
     <div className="lsim" aria-label="Luna training simulator">
-      <style>{styles}</style>
+      <style>{simulatorStyles}</style>
       <div className="lsim-top">
         TRAINING SIMULATOR · Fictional accounts and records · Not connected to production Luna
       </div>

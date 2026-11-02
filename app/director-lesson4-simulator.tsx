@@ -108,8 +108,8 @@ function today() {
 // app/invoices-bills.tsx amountToCents (used for the invoice total and payments)
 function amountToCents(value: string) {
   const normalized = value.trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) throw new Error("Enter a payment amount with no more than two decimal places.");
-  const [whole, fraction = ""] = normalized.split(".");
+  if (!/^(\d+|\d{1,3}(,\d{3})+)(\.\d{1,2})?$/.test(normalized)) throw new Error("Enter a payment amount with no more than two decimal places.");
+  const [whole, fraction = ""] = normalized.replace(/,/g, "").split(".");
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   if (cents <= 0) throw new Error("Payment amount must be greater than zero.");
   return cents;

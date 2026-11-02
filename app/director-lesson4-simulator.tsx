@@ -317,6 +317,12 @@ const missions: Mission[] = [
   },
 ];
 
+// Where each hands-on task is done. Opening a different section during the task gets a hint.
+const missionArea: Record<number, string> = {
+  1: "Invoices & Bills", 2: "Invoices & Bills", 4: "Invoices & Bills", 5: "Invoices & Bills",
+  7: "Vendor Receiving", 8: "Vendor Receiving", 10: "Vendor Receiving",
+};
+
 // Step-by-step help shown after the second unsuccessful try on a task (by task number).
 const missionHelp: Record<number, string[]> = {
   0: ["Supplier bills are entered in Invoices & Bills.", "Click “Invoices & Bills” in the left sidebar."],
@@ -508,6 +514,12 @@ export default function DirectorLesson4Simulator() {
     setSelectedBillId(null);
     setReceivingId(null);
     toTop();
+    const area = missionArea[step];
+    if (mission && mission.kind === "do" && !advanceReady && area && section !== area) {
+      miss([`You opened ${section}. This task is done in ${area}.`, `Click “${area}” in the left sidebar to go back.`]);
+      return;
+    }
+    if (area && section === area && !advanceReady) setFeedback(null);
     attempt({ type: "navigate", section }, () => {});
   }
 

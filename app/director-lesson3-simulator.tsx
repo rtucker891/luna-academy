@@ -103,8 +103,8 @@ function centsText(cents: number) {
 
 function moneyToCents(value: string): number {
   const normalized = value.trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) throw new Error("Enter a nonnegative amount with at most two decimal places.");
-  const [whole, fraction = ""] = normalized.split(".");
+  if (!/^(\d+|\d{1,3}(,\d{3})+)(\.\d{1,2})?$/.test(normalized)) throw new Error("Enter a nonnegative amount with at most two decimal places.");
+  const [whole, fraction = ""] = normalized.replace(/,/g, "").split(".");
   return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
 }
 

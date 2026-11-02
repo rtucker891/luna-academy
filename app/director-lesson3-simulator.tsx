@@ -164,7 +164,11 @@ const missions: Mission[] = [
       "Expected delivery date: any date in the next month",
       "Vendor: Northstar Medical Supply",
       "Customer: Harbour View Pharmacy",
-      "Products: NSM-GLOVE-M, Order unit Box, Quantity 30",
+      "Product line: NSM-GLOVE-M (Nitrile exam gloves, medium)",
+      "Order unit: Box · Items per box: 100 · Quantity: 30",
+      "Unit price (USD): $8.50 per box. Luna fills this in when you choose the product.",
+      "Line total: $255.00",
+      "Use the one product line already on the form. You don't need “Add product line” for a single item.",
     ],
     check: (e) => {
       if (e.type !== "draft-saved") return undefined;
@@ -494,7 +498,15 @@ export default function DirectorLesson3Simulator() {
       toTop();
       emit({ type: "draft-saved", order });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Unable to save the draft.");
+      const message = error instanceof Error ? error.message : "Unable to save the draft.";
+      setNotice(message);
+      const empty = /^Item (\d+): choose a product/.exec(message);
+      if (empty && Number(empty[1]) > 1) {
+        setFeedback({ tone: "bad", lines: [
+          `Luna stopped the save because product line ${empty[1]} is empty. Clicking “Add product line” adds a new blank line. Luna won't save a blank line.`,
+          `Click “Remove” on the empty line ${empty[1]} and save again. This order needs only one line, NSM-GLOVE-M.`,
+        ] });
+      }
     }
   }
 
@@ -805,10 +817,15 @@ export default function DirectorLesson3Simulator() {
                     <input inputMode="decimal" value={line.price} placeholder={saved !== undefined ? "Saved purchase price" : "Enter price"}
                       onChange={(e) => setLines((p) => p.map((l, i) => (i === index ? { ...l, price: e.target.value } : l)))} />
                   </label>
-                  <output>{est === null ? "—" : money(est)}</output>
+                  <output><span style={{ display: "block", color: "#173b70" }}>Line total</span>{est === null ? "—" : money(est)}</output>
                   {lines.length > 1
                     ? <button type="button" className="lsim-sbtn" onClick={() => setLines((p) => p.filter((_, i) => i !== index))}>Remove</button>
                     : <span />}
+                  {product && saved !== undefined && (
+                    <p className="lsim-foot" style={{ gridColumn: "1 / -1", margin: 0 }}>
+                      Saved vendor price: <strong>{money(saved)} per {line.unit}</strong> ({product.sku}, {unitContents(product, line.unit)} items per {line.unit.toLowerCase()}).
+                    </p>
+                  )}
                   {line.productId && saved === undefined && (
                     <p className="lsim-foot" style={{ gridColumn: "1 / -1", margin: 0 }}>
                       No vendor price is available for this unit. Check the purchase cost in Products & Inventory or enter the correct purchase price.

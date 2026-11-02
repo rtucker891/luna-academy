@@ -3,6 +3,8 @@
 import { useRef, useState, type FormEvent } from "react";
 import { useAcademyAuth } from "./academy-auth";
 import {
+  WhyNotWorking,
+  revealChoice,
   Icon,
   canOpenSection,
   coveredIn,
@@ -278,7 +280,41 @@ const missions: Mission[] = [
 
 /* ---------- Component ---------- */
 
-type Feedback = { tone: "good" | "bad"; lines: string[] } | null;
+type Feedback = { tone: "good" | "bad"; lines: string[]; help?: string[] } | null;
+
+// Step-by-step help shown after the second unsuccessful try on a task (by task number).
+const missionHelp: Record<number, string[]> = {
+  0: [
+    "Orders to suppliers are purchase orders. Customer Orders is for sales to customers, so it's the wrong place.",
+    "Click “Purchase Orders” in the left sidebar.",
+  ],
+  1: [
+    "Work down the form in order: pick any Expected delivery date in the next month, then choose Vendor Northstar Medical Supply.",
+    "Choose Customer Harbour View Pharmacy. Luna fills in the delivery address for you.",
+    "On the product line, pick NSM-GLOVE-M in SKU / code. Luna changes the unit to Box and fills in the price, $8.50. Set Quantity to 30.",
+    "Keep only one product line. If you added a blank line, click “Remove” on it. Then click “Save Draft”.",
+    "Luna’s message under the Save Draft button names the field it rejected.",
+  ],
+  3: [
+    "Open PO-00042's order view. If you left it, go to Purchase Orders and click “View order” on the PO-00042 row.",
+    "Click “Submit for Director Approval” at the bottom of the order.",
+  ],
+  4: ["Orders waiting for your signature are in Director Approval.", "Click “Director Approval” in the left sidebar."],
+  5: [
+    "If you're inside an order, click “Back to Director Approval” first.",
+    "In the queue, click “View order” on the PO-00041 row, the Bookkeeper's order for St. Jude Community Hospital.",
+  ],
+  6: [
+    "This order is wrong (500 boxes instead of 50), so don't tick the approval box and don't sign it.",
+    "Type a reason of at least 3 characters in “Reason for returning it for correction”, for example “Customer requested 50 boxes, not 500.”",
+    "Click “Return for Correction”. It stays unavailable until the reason is long enough.",
+  ],
+  7: [
+    "Click “Back to Director Approval”, then “View order” on PO-00042, your gloves order.",
+    "Tick “I approve activating this purchase order.” The “Sign and Activate” button works only after the box is ticked.",
+    "Click “Sign and Activate”. Don't sign PO-00041. It was returned for correction.",
+  ],
+};
 type InputLine = { productId: string; unit: Line["unit"]; contents: string; quantity: string; price: string };
 const blankLine = (): InputLine => ({ productId: "", unit: "Each", contents: "1", quantity: "1", price: "" });
 
@@ -303,6 +339,7 @@ export default function DirectorLesson3Simulator() {
   const [step, setStep] = useState(0);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [advanceReady, setAdvanceReady] = useState(false);
+  const [misses, setMisses] = useState(0);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const [active, setActive] = useState("Home");
@@ -345,8 +382,17 @@ export default function DirectorLesson3Simulator() {
       setFeedback({ tone: "good", lines: mission.learn });
       setAdvanceReady(true);
     } else {
-      setFeedback({ tone: "bad", lines: [result, "Re-read the task and try again."] });
+      miss([result, "Re-read the task and try again."]);
     }
+  }
+
+  // Count unsuccessful tries. From the second one on, explain why it isn't working.
+  function miss(lines: string[]) {
+    if (!mission) return;
+    const tries = misses + 1;
+    setMisses(tries);
+    const help = tries >= 2 ? (mission.kind === "choice" ? revealChoice(mission.options) : missionHelp[step]) : undefined;
+    setFeedback({ tone: "bad", lines, help });
   }
 
   // Keeps the story in order: actions that belong to a later task wait.
@@ -362,7 +408,7 @@ export default function DirectorLesson3Simulator() {
       setFeedback({ tone: "good", lines: [option.why, ...mission.learn] });
       setAdvanceReady(true);
     } else {
-      setFeedback({ tone: "bad", lines: [option.why] });
+      miss([option.why]);
     }
   }
 
@@ -378,6 +424,7 @@ export default function DirectorLesson3Simulator() {
     setStep((s) => s + 1);
     setFeedback(null);
     setAdvanceReady(false);
+    setMisses(0);
   }
 
   function clearForm() {
@@ -386,7 +433,7 @@ export default function DirectorLesson3Simulator() {
   }
 
   function restart() {
-    setStep(0); setFeedback(null); setAdvanceReady(false); setSaveStatus("idle");
+    setStep(0); setFeedback(null); setAdvanceReady(false); setMisses(0); setSaveStatus("idle");
     setActive("Home"); setOrders(seedOrders); setSelectedId(null); setApprovalTab("orders");
     setNotice(""); setSearch(""); clearForm(); setSignatureConfirmed(false); setReturnReason("");
   }
@@ -500,12 +547,15 @@ export default function DirectorLesson3Simulator() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save the draft.";
       setNotice(message);
+      if (advanceReady || mission?.kind !== "do") return;
       const empty = /^Item (\d+): choose a product/.exec(message);
       if (empty && Number(empty[1]) > 1) {
-        setFeedback({ tone: "bad", lines: [
+        miss([
           `Luna stopped the save because product line ${empty[1]} is empty. Clicking “Add product line” adds a new blank line. Luna won't save a blank line.`,
           `Click “Remove” on the empty line ${empty[1]} and save again. This order needs only one line, NSM-GLOVE-M.`,
-        ] });
+        ]);
+      } else {
+        miss([`Luna didn't save the draft: “${message}”`]);
       }
     }
   }
@@ -558,10 +608,10 @@ export default function DirectorLesson3Simulator() {
     if (!selected) return;
     if (!signatureConfirmed) { setNotice("Confirm your approval before signing and activating."); return; }
     if (selected.id === "o41" && selected.lines.some((l) => l.quantity === 500)) {
-      setFeedback({ tone: "bad", lines: [
+      miss([
         "Stop. Compare the order with the customer's request before signing. St. Jude asked for 50 boxes, and this order says 500.",
         "In real Luna, signing would activate the wrong order. In this practice workspace the signature was not applied. Return it for correction instead.",
-      ] });
+      ]);
       setSignatureConfirmed(false);
       return;
     }
@@ -946,6 +996,7 @@ export default function DirectorLesson3Simulator() {
         {!finished && (feedback ? (
           <div className={`lsim-feedback ${feedback.tone}`} role="status">
             {feedback.lines.filter(Boolean).map((line) => <p key={line}>{line}</p>)}
+            <WhyNotWorking help={feedback.help} />
           </div>
         ) : (
           <div className="lsim-note" style={{ marginTop: 0 }}>Do the task in the practice workspace below. Feedback will appear here.</div>

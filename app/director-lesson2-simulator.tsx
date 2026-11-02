@@ -4,6 +4,8 @@ import { useRef, useState, type FormEvent } from "react";
 import { useAcademyAuth } from "./academy-auth";
 import {
   Icon,
+  WhyNotWorking,
+  revealChoice,
   canOpenSection,
   coveredIn,
   descriptions,
@@ -435,7 +437,44 @@ export const formStyles = `
 
 /* ---------- Component ---------- */
 
-type Feedback = { tone: "good" | "bad"; lines: string[] } | null;
+type Feedback = { tone: "good" | "bad"; lines: string[]; help?: string[] } | null;
+
+// Step-by-step help shown after the second unsuccessful try on a task (by task number).
+const missionHelp: Record<number, string[]> = {
+  0: ["Customer records live in the Customers section.", "Click “Customers” in the left sidebar."],
+  1: [
+    "Make sure you're in Customers. Type “bright” in the “Search this list” box above the Customers list.",
+    "Only Bright Smile Dental Clinic (CUST-00012) should remain. Click View on that row.",
+  ],
+  2: [
+    "With Bright Smile's details open, click “Edit customer”. Their details fill the form at the top of the page.",
+    "In Billing address, delete the old address and type “27 Camp Street” on the first line and “Georgetown” on the second.",
+    "Leave Shipping address alone, then click “Save changes”.",
+  ],
+  3: [
+    "Use the “Add a customer” form at the top of Customers. If it says you're editing a customer, cancel the edit first.",
+    "Type Harbour View Pharmacy as the name and K. Williams as the contact.",
+    "Payment due must be a whole number: type 15, with no decimals and no word “days”. Then click “Save customer”.",
+    "If Luna shows a message under the form, it names the field that needs fixing.",
+  ],
+  4: ["Luna calls suppliers vendors.", "Click “Vendors” in the left sidebar."],
+  5: [
+    "In “Add a vendor”, type Northstar Medical Supply as the name.",
+    "Leave Country as United States, and type 45 in Payment due.",
+    "Click “Save vendor”. If a message appears under the form, fix the field it names.",
+  ],
+  7: ["Products are managed in Products & Inventory.", "Click “Products & Inventory” in the left sidebar."],
+  8: [
+    "Check each field against the task: Vendor Northstar Medical Supply, item code nsm-glove-m, purchase cost 8.50, selling price 2500, reorder level 20, unit Box, category Medical supply.",
+    "Northstar appears in the Vendor list only after you saved it in the Vendors task.",
+    "Prices allow at most two decimals. Item codes must be new, so if NSM-GLOVE-M already exists, click Edit on its row instead.",
+    "Read the message under the form. It names exactly what Luna rejected.",
+  ],
+  10: [
+    "The tabs are across the top of Products & Inventory: Product Catalog, Inventory Cost (GYD) and Expiry Alerts.",
+    "Click the middle tab, “Inventory Cost (GYD)”.",
+  ],
+};
 
 const emptyCustomer = {
   company_name: "", contact_name: "", email: "", phone: "",
@@ -455,6 +494,7 @@ export default function DirectorLesson2Simulator() {
   const [step, setStep] = useState(0);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [advanceReady, setAdvanceReady] = useState(false);
+  const [misses, setMisses] = useState(0);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const [active, setActive] = useState("Home");
@@ -503,8 +543,23 @@ export default function DirectorLesson2Simulator() {
       setFeedback({ tone: "good", lines: mission.learn });
       setAdvanceReady(true);
     } else {
-      setFeedback({ tone: "bad", lines: [result, "Re-read the task and try again."] });
+      miss([result, "Re-read the task and try again."]);
     }
+  }
+
+  // Count unsuccessful tries. From the second one on, explain why it isn't working.
+  function miss(lines: string[]) {
+    if (!mission) return;
+    const tries = misses + 1;
+    setMisses(tries);
+    const help = tries >= 2 ? (mission.kind === "choice" ? revealChoice(mission.options) : missionHelp[step]) : undefined;
+    setFeedback({ tone: "bad", lines, help });
+  }
+
+  // A form that Luna refused to save also counts as an unsuccessful try.
+  function formMiss(message: string) {
+    if (!mission || advanceReady || mission.kind !== "do") return;
+    miss([`Luna didn't save it: “${message}”`]);
   }
 
   function choose(option: { correct: boolean; why: string }) {
@@ -513,7 +568,7 @@ export default function DirectorLesson2Simulator() {
       setFeedback({ tone: "good", lines: [option.why, ...mission.learn] });
       setAdvanceReady(true);
     } else {
-      setFeedback({ tone: "bad", lines: [option.why] });
+      miss([option.why]);
     }
   }
 
@@ -532,12 +587,14 @@ export default function DirectorLesson2Simulator() {
     setStep((s) => s + 1);
     setFeedback(null);
     setAdvanceReady(false);
+    setMisses(0);
   }
 
   function restart() {
     setStep(0);
     setFeedback(null);
     setAdvanceReady(false);
+    setMisses(0);
     setSaveStatus("idle");
     setActive("Home");
     setCustomers(seedCustomers);
@@ -605,7 +662,9 @@ export default function DirectorLesson2Simulator() {
       setCNotice(`Customer saved and confirmed: ${customerNumber(next)}.`);
       emit({ type: "customer-saved", mode: "add", customer: created });
     } catch (error) {
-      setCNotice(error instanceof Error ? error.message : "Unable to save customer.");
+      const message = error instanceof Error ? error.message : "Unable to save customer.";
+      setCNotice(message);
+      formMiss(message);
     }
   }
 
@@ -646,7 +705,9 @@ export default function DirectorLesson2Simulator() {
       setVNotice(`Vendor saved and confirmed: ${vendorNumber(next)}.`);
       emit({ type: "vendor-saved", vendor: created });
     } catch (error) {
-      setVNotice(error instanceof Error ? error.message : "Unable to save vendor.");
+      const message = error instanceof Error ? error.message : "Unable to save vendor.";
+      setVNotice(message);
+      formMiss(message);
     }
   }
 
@@ -662,7 +723,9 @@ export default function DirectorLesson2Simulator() {
       setVEditNotice(`${vendorNumber(updated.vendor_number)} changes saved and confirmed.`);
       emit({ type: "vendor-saved", vendor: updated });
     } catch (error) {
-      setVEditNotice(error instanceof Error ? error.message : "Unable to save vendor changes.");
+      const message = error instanceof Error ? error.message : "Unable to save vendor changes.";
+      setVEditNotice(message);
+      formMiss(message);
     }
   }
 
@@ -729,7 +792,9 @@ export default function DirectorLesson2Simulator() {
       setPNotice("Product saved and confirmed: " + sku);
       emit({ type: "product-saved", product: created });
     } catch (error) {
-      setPNotice(error instanceof Error ? error.message : "Unable to save product.");
+      const message = error instanceof Error ? error.message : "Unable to save product.";
+      setPNotice(message);
+      formMiss(message);
     }
   }
 
@@ -1270,6 +1335,7 @@ export default function DirectorLesson2Simulator() {
           feedback ? (
             <div className={`lsim-feedback ${feedback.tone}`} role="status">
               {feedback.lines.map((line) => <p key={line}>{line}</p>)}
+              <WhyNotWorking help={feedback.help} />
             </div>
           ) : (
             <div className="lsim-note" style={{ marginTop: 0 }}>

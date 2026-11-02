@@ -397,7 +397,49 @@ const missions: Mission[] = [
   },
 ];
 
+/* ---------- "Why this isn't working" help after two unsuccessful tries ---------- */
+
+export function revealChoice(options: { text: string; correct: boolean; why: string }[]) {
+  const right = options.find((o) => o.correct);
+  return right ? [`The correct answer is “${right.text}”.`, right.why.replace(/^Correct\.\s*/, "")] : [];
+}
+
+function whyNotWorking(mission: Mission): string[] {
+  switch (mission.kind) {
+    case "navigate":
+      return [
+        `The section you need is ${mission.target}.${descriptions[mission.target] ? ` Luna describes it as: “${descriptions[mission.target]}”` : ""}`,
+        mission.target === "PharmaBridge"
+          ? "Click the green PharmaBridge button at the bottom of the left sidebar."
+          : `Find “${mission.target}” in the left sidebar and click it. Scroll the sidebar if you can't see it.`,
+      ];
+    case "choice":
+      return revealChoice(mission.options);
+    case "signin":
+      return ["Click the green “Sign in as Training Director” button in the practice workspace."];
+    case "back":
+      return ["Click “← Back to Luna” at the top left of the PharmaBridge workspace."];
+    case "signout":
+      return ["Click “Sign out” on the right of the account bar, above the practice workspace."];
+  }
+}
+
+export function WhyNotWorking({ help }: { help?: string[] }) {
+  if (!help || !help.length) return null;
+  return (
+    <div className="lsim-why">
+      <strong>Why this isn’t working</strong>
+      {help.map((line) => <p key={line}>{line}</p>)}
+      <p className="lsim-why-foot">Follow these steps, then try again.</p>
+    </div>
+  );
+}
+
 export const simulatorStyles = `
+.lsim-why { margin-top:10px; padding:10px 12px; background:#fffbeb; border:1px solid #f59e0b; border-left-width:4px; border-radius:8px; color:#3b2a06; }
+.lsim-why strong { display:block; margin-bottom:4px; }
+.lsim-why p { margin:4px 0; }
+.lsim-why-foot { font-size:12px; color:#6b4f12; }
 .lsim { border:1px solid #cbd5e1; border-radius:16px; overflow:hidden; background:#f8fafc; color:#0f172a; margin:16px 0; font-size:15px; font-family:Arial,Helvetica,sans-serif; }
 .lsim-top { background:#0f172a; color:#fff; padding:10px 16px; font-size:13px; letter-spacing:.04em; }
 .lsim-coach { padding:14px 16px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; border-bottom:1px solid #e2e8f0; align-items:start; }
@@ -492,12 +534,13 @@ export const simulatorStyles = `
 }
 `;
 
-type Feedback = { tone: "good" | "bad"; lines: string[] } | null;
+type Feedback = { tone: "good" | "bad"; lines: string[]; help?: string[] } | null;
 
 export default function DirectorWorkspaceSimulator() {
   const [step, setStep] = useState(0);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [advanceReady, setAdvanceReady] = useState(false);
+  const [misses, setMisses] = useState(0);
 
   const [screen, setScreen] = useState<"signin" | "workspace">("signin");
   const [user, setUser] = useState<{ name: string; role: Role } | null>(null);
@@ -515,8 +558,11 @@ export default function DirectorWorkspaceSimulator() {
     setAdvanceReady(true);
   }
 
+  // After a second unsuccessful try, explain why it isn't working.
   function miss(lines: string[]) {
-    setFeedback({ tone: "bad", lines });
+    const tries = misses + 1;
+    setMisses(tries);
+    setFeedback({ tone: "bad", lines, help: tries >= 2 && mission ? whyNotWorking(mission) : undefined });
   }
 
   async function saveCompletion() {
@@ -534,12 +580,14 @@ export default function DirectorWorkspaceSimulator() {
     setStep((s) => s + 1);
     setFeedback(null);
     setAdvanceReady(false);
+    setMisses(0);
   }
 
   function restart() {
     setStep(0);
     setFeedback(null);
     setAdvanceReady(false);
+    setMisses(0);
     setScreen("signin");
     setUser(null);
     setActive("Home");
@@ -697,6 +745,7 @@ export default function DirectorWorkspaceSimulator() {
               {feedback.lines.map((line) => (
                 <p key={line}>{line}</p>
               ))}
+              <WhyNotWorking help={feedback.help} />
             </div>
           ) : (
             <div className="lsim-note" style={{ marginTop: 0 }}>

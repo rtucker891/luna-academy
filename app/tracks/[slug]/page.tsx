@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { directorCurriculum } from "../../director-curriculum";
 import DirectorWorkspaceSimulator from "../../director-workspace-simulator";
+import DirectorLesson2Simulator from "../../director-lesson2-simulator";
 import { directorLearningMaterial } from "../../director-learning-material";
 const learningTracks = [
   {
@@ -278,7 +279,11 @@ export default async function TrackPage({
               {slug === "director" &&
   lesson.title === "Getting started with Luna" && (
     <DirectorWorkspaceSimulator />
-  )}  
+  )}
+              {slug === "director" &&
+  lesson.title === "Customers, vendors, and products" && (
+    <DirectorLesson2Simulator />
+  )}
                 <h3>Learning objective</h3>
                 <p>{lesson.objective}</p>
           {slug === "director" &&

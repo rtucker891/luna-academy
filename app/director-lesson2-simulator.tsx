@@ -402,7 +402,7 @@ const missions: Mission[] = [
 
 /* ---------- Extra styles for record screens ---------- */
 
-const formStyles = `
+export const formStyles = `
 .lsim-module h2 { margin:0 0 4px; font-size:1.1rem; color:#123d68; }
 .lsim-module + .lsim-module { margin-top:14px; }
 .lsim-module > p { margin:0 0 10px; font-size:13px; color:#3b5576; }

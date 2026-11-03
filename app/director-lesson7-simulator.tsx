@@ -23,12 +23,13 @@ import { formStyles } from "./director-lesson2-simulator";
   Labels, statuses, validation messages and confirmations are copied from
   the Luna_Accounting source (app/customer-returns.tsx, app/customer-return-review.tsx,
   app/customer-return-receiving.tsx, app/customer-return-restock.tsx,
-  app/gyd-customer-credit.tsx, app/gyd-customer-return-refund.tsx,
+  app/paid-customer-return-settlement.tsx, accounting/paid-return-settlement.ts,
   app/use-director-credit-approval.ts, database/customer-return-receiving.sql,
   database/customer-invoice-before-shipment.sql, database/gyd-customer-returns-draft.sql,
   database/luna-authorization-levels.sql, database/assistant-bookkeeper-access.sql,
   accounting/customer-return-workflow.ts, docs/customer-return-guide.md and
-  docs/customer-return-*.md; guided flow as of Luna d4ed138). Records, bank accounts and references are fictional
+  docs/customer-return-*.md; guided flow as of Luna d4ed138; paid-sale refund credits as of Luna 21879b1,
+  supabase/migrations/20261103042803_paid_customer_return_refunds.sql and docs/paid-customer-return-refunds.md). Records, bank accounts and references are fictional
   and live only in this browser tab.
 */
 
@@ -53,8 +54,9 @@ type Receipt = {
   id: string; request_id: string; lot: string; date: string; quantity: number; notes: string;
   inspections: Inspection[]; restock?: { id: string; date: string; cost_cents: number; journal: string };
 };
-type Credit = { id: string; receipt_id: string; invoice_id: string; date: string; amount_cents: number; reason: string; status: "draft" | "recorded" | "cancelled" };
-type Refund = { id: string; receipt_id: string; invoice_id: string; date: string; amount_cents: number; bank: string; method: string; reference: string; reason: string };
+// luna_paid_return_credits / luna_paid_return_refunds (supabase/migrations/20261103042803_paid_customer_return_refunds.sql)
+type Credit = { id: string; number: number; receipt_id: string; invoice_id: string; date: string; amount_cents: number; reason: string; status: "draft" | "recorded" | "cancelled" };
+type Refund = { id: string; credit_id: string; receipt_id: string; invoice_id: string; date: string; amount_cents: number; bank: string; method: string; reference: string; reason: string };
 
 const LOT_0238: Lot = { lot: "TR-LOT-0238", supplier_lot: "JRS-24417", expiration: "2028-06-30", category: "medical_supply" };
 const LOT_0231: Lot = { lot: "TR-LOT-0231", supplier_lot: "ACS-55102", expiration: "2028-03-31", category: "medical_supply" };
@@ -64,11 +66,11 @@ const GAUZE = { sku: "JRS-GAUZE-4X4", name: "Sterile gauze pads 4x4", unit: "Box
 const SYRINGE = { sku: "ACS-SYR-5ML", name: "Syringe 5 mL, luer lock", unit: "Box", price_cents: 365000 };
 const GLOVE = { sku: "NSM-GLOVE-M", name: "Nitrile exam gloves, medium", unit: "Box", price_cents: 250000 };
 
-// Recorded customer invoices that can be returned against (app/customer-returns.tsx lists recorded, partially paid and paid).
+// Recorded customer invoices that can be returned against. Luna ships only after full payment, so every one is paid in full.
 const seedInvoices: ReturnInvoice[] = [
   {
-    id: "i32", number: 32, so: 29, customer: "Harbour View Pharmacy", date: "2026-11-02", status: "partially_paid",
-    total_cents: 11350000, paid_cents: 5000000,
+    id: "i32", number: 32, so: 29, customer: "Harbour View Pharmacy", date: "2026-11-02", status: "paid",
+    total_cents: 11350000, paid_cents: 11350000,
     lines: [
       { id: "l32a", ...GLOVE, quantity: 40, shipped_lot: LOT_0252, shipped_from_lot: 30 },
       { id: "l32b", ...GAUZE, quantity: 10, shipped_lot: LOT_0238, shipped_from_lot: 10 },
@@ -80,8 +82,8 @@ const seedInvoices: ReturnInvoice[] = [
     lines: [{ id: "l31a", ...GAUZE, quantity: 20, shipped_lot: LOT_0238, shipped_from_lot: 20 }],
   },
   {
-    id: "i30", number: 30, so: 26, customer: "Riverside Family Clinic", date: "2026-10-15", status: "partially_paid",
-    total_cents: 6350000, paid_cents: 2000000,
+    id: "i30", number: 30, so: 26, customer: "Riverside Family Clinic", date: "2026-10-15", status: "paid",
+    total_cents: 6350000, paid_cents: 6350000,
     lines: [
       { id: "l30a", ...GAUZE, quantity: 20, shipped_lot: LOT_0238, shipped_from_lot: 20 },
       { id: "l30b", ...SYRINGE, quantity: 10, shipped_lot: LOT_0231, shipped_from_lot: 10 },
@@ -113,7 +115,7 @@ const seedReceipts: Receipt[] = [
 const GAUZE_ON_HAND = 54;
 const GAUZE_COST_CENTS_USD = 425;
 
-// GYD customer refunds are paid from a GYD bank account (database/gyd-customer-returns-draft.sql).
+// Refund payments are made from a GYD payment account (get_luna_customer_gyd_bank_accounts).
 const gydBanks = [
   { id: "g1", institution: "Republic Bank", account: "Operating Account (GYD)" },
   { id: "g2", institution: "Demerara Bank", account: "Payroll Account (GYD)" },
@@ -124,7 +126,7 @@ const customers = ["Bright Smile Dental Clinic", "Eastbank Pharmacy", "Harbour V
 const soNumber = (n: number) => `SO-${String(n).padStart(5, "0")}`;
 const invNumber = (n: number) => `INV-${String(n).padStart(5, "0")}`;
 
-// app/gyd-customer-credit.tsx / gyd-customer-return-refund.tsx money(): "GYD 10950.00" (no thousands separator)
+// accounting/paid-return-settlement.ts paidReturnMoney(): "GYD 10950.00" (no thousands separator)
 function money(cents: number) {
   return `GYD ${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }
@@ -134,18 +136,23 @@ function usd(cents: number) {
   return "USD " + String(Math.floor(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + String(cents % 100).padStart(2, "0");
 }
 
+// accounting/paid-return-settlement.ts decimalGyd(): "10950.00"
+function decimalGyd(cents: number) {
+  return money(cents).slice(4);
+}
+
 function today() {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
-// app/gyd-customer-credit.tsx cents(). Academy also accepts grouped thousands such as 10,950.00.
+// accounting/paid-return-settlement.ts enteredGyd(). Academy also accepts grouped thousands such as 10,950.00.
 function gydCents(value: string) {
   const normalized = value.trim();
   if (!/^(\d+|\d{1,3}(,\d{3})+)(\.\d{1,2})?$/.test(normalized)) throw new Error("Enter a GYD amount with up to two decimal places.");
   const [whole, fraction = ""] = normalized.replace(/,/g, "").split(".");
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
-  if (cents <= 0 || cents > Number.MAX_SAFE_INTEGER) throw new Error("Enter a positive supported GYD amount.");
+  if (cents <= 0 || cents > Number.MAX_SAFE_INTEGER) throw new Error("The GYD amount could not be verified.");
   return cents;
 }
 
@@ -169,7 +176,7 @@ function canReviewReturnSettlement(rc: Receipt) {
   return Boolean(latest && latest.decision !== "hold" && latest.condition !== "unknown");
 }
 
-const isError = (text: string) => !/^(Return draft saved|Return authorized|Return draft cancelled|Physical receipt saved|Inspection saved|Credit draft saved|GYD credit posted|Unposted draft cancelled|Returned goods released|The GYD refund was recorded|In real Luna)/.test(text);
+const isError = (text: string) => !/^(Return draft saved|Return authorized|Return draft cancelled|Physical receipt saved|Inspection saved|Refund credit saved|Refund credit approved|Draft cancelled|Returned goods released|Actual refund recorded|In real Luna)/.test(text);
 
 /* ---------- Missions ---------- */
 
@@ -199,7 +206,7 @@ const missions: Mission[] = [
     check: (e) => (e.type !== "navigate" ? undefined : e.section === "Customer Returns" ? null : `You opened ${e.section}. Goods coming back from a customer are handled in Customer Returns.`),
     learn: [
       "Customer Returns handles goods coming back from customers. Supplier Returns is the opposite direction: goods you send back to a vendor.",
-      "Luna now guides every return through 4 numbered steps: 1. Select item & authorize → 2. Receive & inspect → 3. Stock & customer balance → 4. Review & print. Luna moves you to the next step automatically after each save.",
+      "Luna guides every return through 4 numbered steps: 1. Select item & authorize → 2. Receive & inspect → 3. Stock & customer balance → 4. Review & print. Luna moves you to the next step automatically after each save.",
     ],
   },
   {
@@ -212,7 +219,7 @@ const missions: Mission[] = [
     },
     learn: [
       "A return always starts from the original order. Luna only lists orders with a recorded invoice, because the return has to be matched to what was billed and shipped.",
-      "Riverside's invoice INV-00030 totals GYD 63500.00. They've paid GYD 20000.00, so GYD 43500.00 is still unpaid. You'll need that later.",
+      "Riverside's invoice INV-00030 totals GYD 63500.00 and is paid in full. Luna only lets goods ship once the invoice is fully paid, so every return you handle is on a sale the customer has already paid for.",
     ],
   },
   {
@@ -242,8 +249,8 @@ const missions: Mission[] = [
     kind: "choice",
     prompt: "The return is saved as a draft. What has that changed so far?",
     options: [
-      { text: "Riverside's balance has already gone down by the value of the 3 boxes", correct: false, why: "Not quite. No credit exists yet. The balance only changes when a Director posts a credit in step 3." },
-      { text: "Nothing in stock, accounts or the customer's balance. It's only a saved request waiting for authorization", correct: true, why: "Correct. A draft only records the request. Authorization, receiving, inspection and any credit are all separate steps." },
+      { text: "EMS already owes Riverside the value of the 3 boxes", correct: false, why: "Not quite. Nothing is owed yet. EMS only owes the customer once a Director approves a refund credit in step 3." },
+      { text: "Nothing in stock, accounts or what EMS owes the customer. It's only a saved request waiting for authorization", correct: true, why: "Correct. A draft only records the request. Authorization, receiving, inspection and the refund credit are all separate steps." },
       { text: "The 3 boxes have been added back to stock", correct: false, why: "Not quite. Nothing has even arrived yet. Returned goods never go straight back into stock in Luna; they're quarantined and inspected first." },
     ],
     learn: ["Each step in a Luna return does one thing only, so you can always see exactly where a return is."],
@@ -296,7 +303,7 @@ const missions: Mission[] = [
       if (e.type !== "inspect") return undefined;
       if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Inspect Riverside's syringe receipt (lot TR-LOT-0231).";
       if (e.condition !== "damaged") return `You recorded the condition as ${conditionText(e.condition)}. The cartons are crushed, so choose “Damaged”.`;
-      if (e.decision === "hold") return "“Keep on hold” is for batches you can't decide on yet. It keeps the return in step 2 and blocks any credit. These boxes are clearly crushed, so choose “Ineligible for restock”.";
+      if (e.decision === "hold") return "“Keep on hold” is for batches you can't decide on yet. It keeps the return in step 2 and blocks any refund credit. These boxes are clearly crushed, so choose “Ineligible for restock”.";
       return null;
     },
     learn: [
@@ -309,64 +316,100 @@ const missions: Mission[] = [
     prompt: "The “Lot TR-LOT-0231” box now reads “Not eligible for resale. Financial settlement can be reviewed separately.” What does that mean?",
     options: [
       { text: "Luna has recorded the boxes as thrown away", correct: false, why: "Not quite. Luna's inspection screen says “Ineligible” does not record disposal. Disposal is handled separately." },
-      { text: "They stay quarantined and won't go back into stock, but Riverside can still be credited", correct: true, why: "Correct. The decision only controls restocking. Any decision other than “Keep on hold” unlocks the credit and refund buttons." },
-      { text: "Riverside can't get anything back because the goods can't be resold", correct: false, why: "Not quite. Whether you can resell the goods and whether the customer is settled are separate questions. That's why the box still shows “Review customer credit”." },
+      { text: "They stay quarantined and won't go back into stock, but Riverside can still get its money back", correct: true, why: "Correct. The decision only controls restocking. Any decision other than “Keep on hold” unlocks “Review refund credit” and “Record customer refund”." },
+      { text: "Riverside can't get anything back because the goods can't be resold", correct: false, why: "Not quite. Whether you can resell the goods and whether the customer gets money back are separate questions. That's why the box still shows “Review refund credit”." },
     ],
-    learn: ["“Ineligible for restock” is about the goods. Whether the customer is credited is decided separately, in step 3."],
+    learn: ["“Ineligible for restock” is about the goods. Paying the customer back is decided separately, in step 3."],
   },
   {
     kind: "do",
-    prompt: "You're on “3. Stock & customer balance”. In the box headed “Lot TR-LOT-0231”, click “Review customer credit”. Save a credit draft for the full value of the 3 boxes.",
+    prompt: "You're on “3. Stock & customer balance”. In the box headed “Lot TR-LOT-0231”, click “Review refund credit”. The panel “Paid-sale return — refund to customer (GYD)” opens below the box. Under “1. Prepare refund credit”, save a refund credit for the full value of the 3 boxes.",
     details: [
-      "Credit date: today (already filled in)",
-      "Credit amount (GYD): 10950.00 (or 10,950.00), which is 3 boxes × GYD 3650.00",
-      "Reason: at least 10 characters, for example “Credit for 3 boxes of syringes returned crushed.”",
-      "Click “Save credit draft for review”",
+      "Refund credit amount (GYD): Luna already filled in 10950.00, which is 3 boxes × GYD 3650.00 (10,950.00 also works)",
+      "Reason for refund credit: at least 10 characters, for example “Refund for 3 boxes of syringes returned crushed.”",
+      "Click “Save refund credit for Director”",
     ],
     check: (e) => {
-      if (e.type === "refund-preview" && e.receipt.id === RIVERSIDE_RECEIPT) return "Riverside still owes GYD 43500.00 on INV-00030, which is more than the GYD 10950.00 being returned. Reduce what they owe with “Review customer credit” rather than recording money paid out with “Record customer refund”.";
       if (e.type !== "credit-prepare") return undefined;
-      if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Prepare the credit on Riverside's syringe receipt (lot TR-LOT-0231).";
-      if (e.amount_cents !== 1095000) return `You entered ${money(e.amount_cents)}. Credit the full returned value: 3 boxes × GYD 3650.00 = GYD 10950.00.`;
+      if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Prepare the refund credit on Riverside's syringe receipt (lot TR-LOT-0231).";
+      if (e.amount_cents !== 1095000) return `You entered ${money(e.amount_cents)}. Refund the full returned value: 3 boxes × GYD 3650.00 = GYD 10950.00.`;
       return null;
     },
     learn: [
-      "Luna confirmed: “Credit draft saved. No accounting entry has been posted.”",
-      "Luna capped the credit at “Maximum return credit: GYD 10950.00”. That's the smaller of the returned value and the unpaid balance (GYD 43500.00).",
+      "Luna confirmed: “Refund credit saved for Director approval. No payment or stock release has occurred.”",
+      "The credit is numbered RCN-00001 and shows as “draft” in “Refund credit history”. Luna pre-filled the amount with the “Available return allowance”: the value of the returned boxes. You can't credit more than that.",
+      "Both “Review refund credit” and “Record customer refund” open this same panel. A paid sale is always settled the same way: refund credit first, then the payment.",
     ],
   },
   {
     kind: "do",
-    prompt: "Under “Review unposted credit”, tick “I confirm this credit and authorize the accounting adjustment.” and click “Post reviewed credit”.",
+    prompt: "Luna opened “2. Director approval” just below “Refund credit history”. Tick “I approve this return credit and the amount EMS owes the customer.” and click “Approve refund credit”.",
     check: (e) => {
       if (e.type !== "credit-post") return undefined;
-      if (e.credit.receipt_id !== RIVERSIDE_RECEIPT) return "Post the credit for Riverside's syringes.";
+      if (e.credit.receipt_id !== RIVERSIDE_RECEIPT) return "Approve the refund credit for Riverside's syringes (RCN-00001).";
       return null;
     },
     learn: [
-      "Luna confirmed: “GYD credit posted and confirmed.” The credit history now shows the credit note as “recorded”.",
-      "Only a Director can post a credit. A Bookkeeper can prepare the draft, and the Director reviews and posts it.",
+      "Luna confirmed: “Refund credit approved. EMS now owes this amount to the customer. Record the refund only after payment.”",
+      "RCN-00001 now reads “Director approved” and “Refund still payable: GYD 10950.00”. Only a Director can approve. A Bookkeeper can prepare the credit, and the Director reviews and approves it.",
     ],
   },
   {
     kind: "choice",
-    prompt: "The credit is posted. What has changed?",
+    prompt: "RCN-00001 is approved. What did the approval change?",
     options: [
-      { text: "GYD 10950.00 was paid to Riverside from the bank", correct: false, why: "Not quite. A credit moves no money. It reduces what the customer owes." },
-      { text: "Riverside now owes GYD 32550.00 on INV-00030 instead of GYD 43500.00, and no money or stock moved", correct: true, why: "Correct. The credit reduces Accounts Receivable by GYD 10950.00. The crushed boxes stay in quarantine." },
-      { text: "The 3 boxes went back into stock and Riverside's balance went down", correct: false, why: "Not quite. The balance went down, but the boxes were inspected as ineligible, so they stay quarantined. Luna's step 3 says it plainly: “Posting a credit does not restock goods.”" },
+      { text: "GYD 10950.00 was paid to Riverside from the bank", correct: false, why: "Not quite. Approval moves no money. Luna says to “Record the refund only after payment.”" },
+      { text: "It reversed the sale (Dr 4100 Sales returns) and recorded that EMS owes Riverside GYD 10950.00 (Cr 2300 Customer refunds payable). No money moved, and INV-00030 is still fully paid", correct: true, why: "Correct. The approved credit creates a refund payable to the customer. The invoice and its paid balance don't change." },
+      { text: "INV-00030 now shows GYD 10950.00 less to pay", correct: false, why: "Not quite. INV-00030 was already paid in full, so there's nothing left to reduce. The credit records what EMS now owes Riverside instead." },
     ],
-    learn: ["A credit note lowers the invoice balance and reverses that part of the sale in the accounts. It doesn't touch the bank or the stock."],
+    learn: ["Think of the refund credit as an IOU from EMS to the customer. It stays on the books, in Customer refunds payable (2300), until the money is actually paid."],
+  },
+  {
+    kind: "do",
+    prompt: "Your bank sent Riverside a GYD 10950.00 transfer this morning. In “Refund credit history”, under RCN-00001, click “Record payment for this credit”. Fill in “3. Record an actual refund payment” and click “Review approved refund payment”.",
+    details: [
+      "Amount actually refunded (GYD): Luna already filled in 10950.00",
+      "GYD payment account: Republic Bank — Operating Account (GYD)",
+      "Refund payment method: bank transfer",
+      "Actual refund payment reference: RFC-RFD-0112",
+      "Payment notes: at least 10 characters, for example “Bank transfer refund for 3 crushed boxes of syringes.”",
+    ],
+    check: (e) => {
+      if (e.type !== "refund-preview") return undefined;
+      if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Record the payment on Riverside's refund credit RCN-00001.";
+      if (e.amount_cents !== 1095000) return `You entered ${money(e.amount_cents)}. The bank sent the full GYD 10950.00.`;
+      if (e.bank !== "g1") return "The transfer went out of Republic Bank — Operating Account (GYD). Choose that account.";
+      if (e.method !== "bank_transfer") return "The refund was sent by bank transfer. Choose “bank transfer”.";
+      if (e.reference !== "RFC-RFD-0112") return `You typed “${e.reference}”. Use the bank's reference for this transfer: RFC-RFD-0112.`;
+      return null;
+    },
+    learn: [
+      "Luna shows “Review actual refund payment” with the amount, bank account and reference. Nothing is recorded yet.",
+      "Luna won't let the payment be more than “Refund still payable”. It records a refund that already happened, by any method. It never sends money.",
+    ],
+  },
+  {
+    kind: "do",
+    prompt: "Check the review. Tick “I confirm this refund has actually been paid to the customer.” and click “Record approved refund payment”.",
+    check: (e) => {
+      if (e.type !== "refund-record") return undefined;
+      if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Record Riverside's refund payment.";
+      return null;
+    },
+    learn: [
+      "Luna confirmed: “Actual refund recorded against the approved credit. Sales were not reversed again.”",
+      "The payment appears under “Refund payments” with a “Print refund receipt” button. RCN-00001 now shows “Refund still payable: GYD 0.00”. Like any payment, it can't be edited or deleted, which is why Luna shows a review first.",
+    ],
   },
   {
     kind: "choice",
-    prompt: "Why was a credit the right choice for Riverside, rather than recording a customer refund?",
+    prompt: "What did recording Riverside's refund payment do in the accounts?",
     options: [
-      { text: "Riverside still owed more than the returned value, so reducing what they owe settles it", correct: true, why: "Correct. They owed GYD 43500.00, more than the GYD 10950.00 returned. A refund is for money the customer has already paid you." },
-      { text: "Luna doesn't allow refunds on damaged goods", correct: false, why: "Not quite. The goods' condition doesn't decide credit or refund. What matters is whether the customer has an unpaid balance or has already paid." },
-      { text: "Credits are always used before refunds", correct: false, why: "Not quite. It depends on the invoice. A fully paid invoice has no balance to reduce, so its return is settled with a refund. You'll do one next." },
+      { text: "Dr 2300 Customer refunds payable, Cr the Republic Bank account. It cleared what EMS owed Riverside", correct: true, why: "Correct. The payable created by the approval is paid off, and the bank balance goes down by the actual transfer." },
+      { text: "It reduced Sales a second time", correct: false, why: "Not quite. Sales were reversed once, when the credit was approved. Luna's message says: “Sales were not reversed again.”" },
+      { text: "It lowered the paid amount on INV-00030 to GYD 52550.00", correct: false, why: "Not quite. The invoice and its payments don't change. The refund is tracked against the refund credit, not the invoice." },
     ],
-    learn: ["Rule of thumb: unpaid balance → credit. Money already received → refund."],
+    learn: ["Two entries, two moments: approval records what EMS owes (Dr 4100 / Cr 2300). Payment records the money going out (Dr 2300 / Cr bank). If only part is paid, the rest stays visible as “Refund still payable”."],
   },
   {
     kind: "do",
@@ -378,7 +421,7 @@ const missions: Mission[] = [
     },
     learn: [
       "Luna shows “Return progress”. The “Lot TR-LOT-0238” box reads “Eligible for a separate restock review — still quarantined”, and its button says “Continue to stock & settlement” because the inspection is already done.",
-      "Saved returns now sit inside “Find a saved return”, so the page stays focused on the return you're working on.",
+      "Saved returns sit inside “Find a saved return”, so the page stays focused on the return you're working on.",
     ],
   },
   {
@@ -398,49 +441,45 @@ const missions: Mission[] = [
     kind: "choice",
     prompt: "The release review showed “Exact cost restored: USD 25.50”. What did the release record?",
     options: [
-      { text: "A debit to Inventory (1200) and a credit to Cost of Goods Sold (5000) at the original cost, with no change to what St. Jude owes", correct: true, why: "Correct. The boxes go back at what they cost you, not the selling price. The customer's money is handled separately." },
-      { text: "A GYD 8100.00 refund to St. Jude, so the return is now finished", correct: false, why: "Not quite. Restocking only deals with stock and its cost. Luna never treats a restocked receipt as settled; the refund is a separate step." },
-      { text: "A credit to Sales Revenue at the selling price", correct: false, why: "Not quite. Restocking uses the original cost, USD 4.25 a box. The selling price matters only for the credit or refund." },
+      { text: "A debit to Inventory (1200) and a credit to Cost of Goods Sold (5000) at the original cost, with nothing owed or paid to St. Jude yet", correct: true, why: "Correct. The boxes go back at what they cost you, not the selling price. The customer's money is handled separately, with a refund credit." },
+      { text: "A GYD 8100.00 refund to St. Jude, so the return is now finished", correct: false, why: "Not quite. Restocking only deals with stock and its cost. Luna never treats a restocked receipt as settled; the refund credit is a separate step." },
+      { text: "A credit to Sales Revenue at the selling price", correct: false, why: "Not quite. Restocking uses the original cost, USD 4.25 a box. The selling price matters only for the refund credit." },
     ],
-    learn: ["A restocked receipt can still need its credit or refund. The review shows the cost in USD because that's the currency the lot was bought in (Lesson 5)."],
+    learn: ["A restocked receipt still needs its refund credit. The review shows the cost in USD because that's the currency the lot was bought in (Lesson 5). Neither approving a refund credit nor paying it releases stock."],
   },
   {
     kind: "do",
-    prompt: "St. Jude paid INV-00031 in full, so they get their money back. Your bank sent the transfer this morning. In the same “Lot TR-LOT-0238” box, click “Record customer refund”. Fill in the form and click “Review refund”.",
+    prompt: "St. Jude paid INV-00031 in full, so they're owed GYD 8100.00. In the same “Lot TR-LOT-0238” box, click “Review refund credit”. Under “1. Prepare refund credit”, save the refund credit, then approve it under “2. Director approval”.",
     details: [
-      "Amount refunded (GYD): 8100.00 (or 8,100.00), which is 6 boxes × GYD 1350.00",
-      "GYD bank account: Republic Bank — Operating Account (GYD)",
-      "Payment method: Bank transfer",
-      "Actual refund reference: SJ-RFD-0107",
-      "Reason: at least 10 characters, for example “Refund for 6 unopened boxes of gauze returned.”",
+      "Refund credit amount (GYD): Luna already filled in 8100.00, which is 6 boxes × GYD 1350.00",
+      "Reason for refund credit: at least 10 characters, for example “Refund for 6 unopened boxes of gauze returned.”",
+      "Click “Save refund credit for Director”",
+      "Then tick “I approve this return credit and the amount EMS owes the customer.” and click “Approve refund credit”",
     ],
     check: (e) => {
-      if (e.type === "credit-prepare" && e.receipt.id === SJ_RECEIPT) return "St. Jude has no unpaid balance to reduce. Use “Record customer refund”.";
-      if (e.type !== "refund-preview") return undefined;
-      if (e.receipt.id !== SJ_RECEIPT) return "Prepare the refund on St. Jude's gauze receipt (lot TR-LOT-0238).";
-      if (e.amount_cents !== 810000) return `You entered ${money(e.amount_cents)}. Refund the full returned value: 6 boxes × GYD 1350.00 = GYD 8100.00.`;
-      if (e.bank !== "g1") return "The transfer went out of Republic Bank — Operating Account (GYD). Choose that account.";
-      if (e.method !== "bank_transfer") return "The refund was sent by bank transfer. Choose “Bank transfer”.";
-      if (e.reference !== "SJ-RFD-0107") return `You typed “${e.reference}”. Use the bank's reference for this transfer: SJ-RFD-0107.`;
+      if (e.type === "credit-prepare") {
+        if (e.receipt.id !== SJ_RECEIPT) return "Prepare the refund credit on St. Jude's gauze receipt (lot TR-LOT-0238).";
+        if (e.amount_cents !== 810000) return `You entered ${money(e.amount_cents)}. Refund the full returned value: 6 boxes × GYD 1350.00 = GYD 8100.00.`;
+        return undefined; // saved; the task finishes when the credit is approved
+      }
+      if (e.type !== "credit-post") return undefined;
+      if (e.credit.receipt_id !== SJ_RECEIPT) return "Approve the refund credit for St. Jude's gauze (RCN-00002).";
       return null;
     },
     learn: [
-      "Luna shows “Review actual customer refund” with the amount, date, bank account and reference. Nothing is recorded yet.",
-      "Luna capped this at “Maximum refund for this return: GYD 8100.00”, the smaller of the returned value and what St. Jude actually paid. The button is called “Record customer refund” because Luna records a refund that already happened, by any method. It never sends money.",
+      "Luna confirmed: “Refund credit approved. EMS now owes this amount to the customer. Record the refund only after payment.”",
+      "RCN-00002 reads “Director approved” and “Refund still payable: GYD 8100.00”.",
     ],
   },
   {
-    kind: "do",
-    prompt: "Check the review. Tick “I confirm this refund has actually been paid to the customer.” and click “Record confirmed refund”.",
-    check: (e) => {
-      if (e.type !== "refund-record") return undefined;
-      if (e.receipt.id !== SJ_RECEIPT) return "Record St. Jude's refund.";
-      return null;
-    },
-    learn: [
-      "Luna confirmed: “The GYD refund was recorded and confirmed.” It appears under “Refund history”.",
-      "Like a payment, a recorded refund can't be edited or deleted. That's why Luna shows a review first.",
+    kind: "choice",
+    prompt: "Accounts will send St. Jude's GYD 8100.00 transfer next week. A colleague wants to click “Record payment for this credit” now, so it isn't forgotten. What should you tell them?",
+    options: [
+      { text: "That's fine. Recording it now reminds us to pay", correct: false, why: "Not quite. Luna asks you to confirm the refund “has actually been paid to the customer”. Recording it early makes the bank account wrong." },
+      { text: "Leave it. RCN-00002 already shows “Refund still payable: GYD 8100.00”. Record the payment only after the money has gone out, with the real transfer reference", correct: true, why: "Correct. The approved credit is the reminder: it stays visible as payable until the payment is recorded. Luna's panel says: “Record this only after the customer has been paid.”" },
+      { text: "Cancel the refund credit and make a new one next week", correct: false, why: "Not quite. An approved refund credit can't be cancelled, and there's no need to. It correctly shows what EMS owes until it's paid." },
     ],
+    learn: ["Luna records money that has actually moved. That applies to customer payments, vendor payments and customer refunds alike."],
   },
   {
     kind: "do",
@@ -452,35 +491,36 @@ const missions: Mission[] = [
     },
     learn: [
       "In real Luna this opens the Customer Return Receipt in a new window, ready to print.",
-      "Step 4 says: “Printing does not confirm a stock release, credit or refund.” A return receipt proves the goods came back. Credit notes and refund receipts are printed from their own history in step 3.",
+      "Step 4 says: “Printing does not confirm a stock release, credit or refund.” A return receipt proves the goods came back. The refund credit note and refund receipt are printed from the refund panel in step 3. Approved refund credits also appear under Invoices & Bills > Credit notes, with an “Open refund credit” button.",
     ],
-  },
-  {
-    kind: "choice",
-    prompt: "A colleague wants to record St. Jude's refund now and send the bank transfer next week. What should you tell them?",
-    options: [
-      { text: "That's fine. Recording it first reminds us to pay", correct: false, why: "Not quite. Luna asks you to confirm the refund “has actually been paid”. Recording it early makes the bank account and the customer record wrong." },
-      { text: "Record it only after the money has actually left the bank, using the real transfer reference", correct: true, why: "Correct. Luna's step 3 says: “recording a refund does not send money.” It records a refund that has already happened." },
-      { text: "Record it as a credit instead", correct: false, why: "Not quite. St. Jude paid in full, so there's no balance to credit. The answer is to wait until the refund is actually paid." },
-    ],
-    learn: ["The same rule applies to customer payments and vendor payments: Luna records money that has actually moved."],
   },
   {
     kind: "choice",
     prompt: "Who can do what with customer returns in Luna?",
     options: [
-      { text: "Anyone who can see the invoice can authorize returns and post credits", correct: false, why: "Not quite. Returns move stock and accounting, so Luna limits each step by role." },
-      { text: "A Director authorizes, receives, inspects, releases stock and posts credits. A Bookkeeper can prepare credit drafts and record refunds. A Salesman can't work on returns", correct: true, why: "Correct. Return review, receiving, inspection and stock release need “director” permission, and only a Director can post a credit note. Preparing credits and recording refunds use “bookkeeping” permission. Luna's new guided steps didn't change any of these checks." },
-      { text: "A Salesman can authorize returns for their own customers", correct: false, why: "Not quite. Salesmen have only “sales” permission, which doesn't include customer returns." },
+      { text: "Anyone who can see the invoice can authorize returns and approve refund credits", correct: false, why: "Not quite. Returns move stock, accounts and money, so Luna limits each step by role." },
+      { text: "A Director authorizes, receives, inspects, releases stock and approves refund credits. A Bookkeeper can prepare a refund credit and record a refund payment that's already been made. A Salesman can't work on returns", correct: true, why: "Correct. Preparing a refund credit and recording the payment use “bookkeeping” permission. Only a Director can approve a refund credit: “Only a Director can approve and post refund credit notes.”" },
+      { text: "A Bookkeeper can approve a refund credit as long as they also record the payment", correct: false, why: "Not quite. Approval always needs a Director. The person who prepares a refund credit isn't the one who approves it." },
     ],
-    learn: ["This split means the person who prepares a credit or a refund isn't always the person who approves it."],
+    learn: ["This split means no single non-Director can both decide that EMS owes a customer money and record paying it."],
+  },
+  {
+    kind: "choice",
+    prompt: "Why does every return on a GYD sale now go through a refund credit, instead of just lowering what the customer owes?",
+    options: [
+      { text: "Luna only lets goods ship once the invoice is paid in full, so by the time goods come back there's no unpaid balance to lower", correct: true, why: "Correct. Partial payments and credits don't unlock shipping. Because the sale is already paid, the return becomes money EMS owes the customer." },
+      { text: "Because refund credits are quicker than ordinary credits", correct: false, why: "Not quite. It isn't about speed. It's because every shipped sale has already been paid in full." },
+      { text: "Because damaged goods can't be credited", correct: false, why: "Not quite. The goods' condition only decides restocking. Both of today's returns, damaged and unopened, used a refund credit." },
+    ],
+    learn: ["Full payment before shipping → every return is a refund: refund credit (Director) → actual payment (after the money moves)."],
   },
 ];
 
 // Where each hands-on task is done. Opening a different section during the task gets a hint.
 const missionArea: Record<number, string> = {
   1: "Customer Returns", 2: "Customer Returns", 4: "Customer Returns", 5: "Customer Returns", 6: "Customer Returns",
-  8: "Customer Returns", 9: "Customer Returns", 12: "Customer Returns", 13: "Customer Returns", 15: "Customer Returns", 16: "Customer Returns", 17: "Customer Returns",
+  8: "Customer Returns", 9: "Customer Returns", 11: "Customer Returns", 12: "Customer Returns",
+  14: "Customer Returns", 15: "Customer Returns", 17: "Customer Returns", 19: "Customer Returns",
 };
 
 // Step-by-step help shown after the second unsuccessful try on a task (by task number).
@@ -512,31 +552,36 @@ const missionHelp: Record<number, string[]> = {
   ],
   8: [
     "Make sure “3. Stock & customer balance” is the highlighted step button.",
-    "In the box headed “Lot TR-LOT-0231”, click “Review customer credit”. The “Customer credit notes” form opens just below.",
-    "Type 10950.00 in “Credit amount (GYD)” and a reason of at least 10 characters, then click “Save credit draft for review”.",
+    "In the box headed “Lot TR-LOT-0231”, click “Review refund credit”. Scroll down to the panel “Paid-sale return — refund to customer (GYD)”.",
+    "Under “1. Prepare refund credit”, leave 10950.00 in “Refund credit amount (GYD)”, type a reason of at least 10 characters, then click “Save refund credit for Director”.",
   ],
   9: [
-    "The draft is under “Review unposted credit”. If it's closed, click “Review draft” in “Credit history”.",
-    "Tick “I confirm this credit and authorize the accounting adjustment.”, then click “Post reviewed credit”.",
+    "“2. Director approval” sits below “Refund credit history”. If it's closed, click “Review refund credit” next to RCN-00001 in “Refund credit history”.",
+    "Tick “I approve this return credit and the amount EMS owes the customer.”, then click “Approve refund credit”.",
+  ],
+  11: [
+    "In the panel “Paid-sale return — refund to customer (GYD)”, find RCN-00001 under “Refund credit history” and click “Record payment for this credit”.",
+    "Leave 10950.00, choose “Republic Bank — Operating Account (GYD)” and “bank transfer”, and type RFC-RFD-0112 as the reference.",
+    "Type payment notes of at least 10 characters, then click “Review approved refund payment”.",
   ],
   12: [
+    "Under “Review actual refund payment”, tick “I confirm this refund has actually been paid to the customer.”",
+    "Click “Record approved refund payment”. To fix something first, click “Change payment details”.",
+  ],
+  14: [
     "At the top of Customer Returns, choose St. Jude Community Hospital in “Customer”, then “SO-00027 — St. Jude Community Hospital” in “Customer order”. Or click “Show all”, then “Open returns” on the SO-00027 row in “Find another customer order”.",
     "Click “Find a saved return (1)” to open the list, then click “Open review” on RET-5c2e81d4.",
   ],
-  13: [
+  15: [
     "In the box headed “Lot TR-LOT-0238”, click “Continue to stock & settlement”. You can also click the step button “3. Stock & customer balance”.",
     "Click “Review stock release”, tick the box that starts “I reviewed the eligible inspection…”, then click “Release stock and record adjustment”.",
   ],
-  15: [
-    "Make sure “3. Stock & customer balance” is the highlighted step button. In the box headed “Lot TR-LOT-0238”, click “Record customer refund”. The refund form opens just below.",
-    "Type 8100.00, choose “Republic Bank — Operating Account (GYD)” and “Bank transfer”, and type SJ-RFD-0107 as the reference.",
-    "Type a reason of at least 10 characters, then click “Review refund”.",
-  ],
-  16: [
-    "Under “Review actual customer refund”, tick “I confirm this refund has actually been paid to the customer.”",
-    "Click “Record confirmed refund”. To fix something first, click “Change details”.",
-  ],
   17: [
+    "Make sure “3. Stock & customer balance” is the highlighted step button. In the box headed “Lot TR-LOT-0238”, click “Review refund credit”, then scroll down to the refund panel.",
+    "Under “1. Prepare refund credit”, leave 8100.00, type a reason of at least 10 characters and click “Save refund credit for Director”.",
+    "Under “2. Director approval”, tick the approval box and click “Approve refund credit”.",
+  ],
+  19: [
     "The step buttons sit at the top of “Return progress”: “2. Receive & inspect”, “3. Stock & customer balance” and “4. Review & print”.",
     "Click “4. Review & print”, then click “Print return receipt” in the box headed “Lot TR-LOT-0238”.",
   ],
@@ -612,19 +657,16 @@ export default function DirectorLesson7Simulator() {
   const [decision, setDecision] = useState<Decision>("hold");
   const [inspNotes, setInspNotes] = useState("");
   const [inspConfirmed, setInspConfirmed] = useState(false);
-  const [panel, setPanel] = useState<{ kind: "credit" | "refund" | "restock"; receiptId: string } | null>(null);
+  const [panel, setPanel] = useState<{ kind: "settle" | "restock"; receiptId: string } | null>(null);
   const [flow, setFlow] = useState<ReturnStep>("receive");
 
-  // Credit (app/gyd-customer-credit.tsx)
-  const [creditDate, setCreditDate] = useState(today());
+  // Paid-sale return settlement (app/paid-customer-return-settlement.tsx)
+  const [settleNotice, setSettleNotice] = useState("");
   const [creditValue, setCreditValue] = useState("");
   const [creditReason, setCreditReason] = useState("");
   const [chosenCredit, setChosenCredit] = useState<string | null>(null);
   const [creditConfirmed, setCreditConfirmed] = useState(false);
-  const [creditNotice, setCreditNotice] = useState("");
-
-  // Refund (app/gyd-customer-return-refund.tsx)
-  const [refundDate, setRefundDate] = useState(today());
+  const [payCreditId, setPayCreditId] = useState("");
   const [refundValue, setRefundValue] = useState("");
   const [refundBank, setRefundBank] = useState("");
   const [refundMethod, setRefundMethod] = useState("bank_transfer");
@@ -632,7 +674,6 @@ export default function DirectorLesson7Simulator() {
   const [refundReason, setRefundReason] = useState("");
   const [refundPlan, setRefundPlan] = useState<Omit<Refund, "id" | "invoice_id"> | null>(null);
   const [refundConfirmed, setRefundConfirmed] = useState(false);
-  const [refundNotice, setRefundNotice] = useState("");
 
   // Restock (app/customer-return-restock.tsx)
   const [restockConfirmed, setRestockConfirmed] = useState(false);
@@ -728,12 +769,12 @@ export default function DirectorLesson7Simulator() {
   }
 
   function resetCredit() {
-    setCreditDate(today()); setCreditValue(""); setCreditReason(""); setChosenCredit(null); setCreditConfirmed(false); setCreditNotice("");
+    setSettleNotice(""); setCreditValue(""); setCreditReason(""); setChosenCredit(null); setCreditConfirmed(false);
   }
 
   function resetRefund() {
-    setRefundDate(today()); setRefundValue(""); setRefundBank(""); setRefundMethod("bank_transfer"); setRefundRef(""); setRefundReason("");
-    setRefundPlan(null); setRefundConfirmed(false); setRefundNotice("");
+    setPayCreditId(""); setRefundValue(""); setRefundBank(""); setRefundMethod("bank_transfer"); setRefundRef(""); setRefundReason("");
+    setRefundPlan(null); setRefundConfirmed(false);
   }
 
   function restart() {
@@ -773,21 +814,18 @@ export default function DirectorLesson7Simulator() {
     return Math.max(0, line.shipped_from_lot - received);
   }
 
-  const postedCredits = (invoiceId: string) => credits.filter((c) => c.invoice_id === invoiceId && c.status === "recorded").reduce((s, c) => s + c.amount_cents, 0);
-  const refundedOn = (invoiceId: string) => refunds.filter((r) => r.invoice_id === invoiceId).reduce((s, r) => s + r.amount_cents, 0);
+  const refundedOn = (credit: Credit) => refunds.filter((r) => r.credit_id === credit.id).reduce((s, r) => s + r.amount_cents, 0);
+  const stillPayable = (credit: Credit) => Math.max(0, credit.amount_cents - refundedOn(credit));
 
-  // database/gyd-customer-returns-draft.sql gyd_customer_return_basis()
-  function basis(rc: Receipt): { blocked: string } | { maxCredit: number; maxRefund: number } {
+  // luna_private.paid_return_basis(): the returned value less refund credits already drafted or approved.
+  function basis(rc: Receipt): { blocked: string } | { available: number } {
     const latest = rc.inspections[rc.inspections.length - 1];
     if (!latest || latest.decision === "hold") return { blocked: "Complete inspection and an eligibility decision before settlement." };
     const inv = invoiceOfReceipt(rc);
+    if (inv.paid_cents < inv.total_cents) return { blocked: "Paid-return credits require the original invoice to have been fully paid in cash or recorded customer payments." };
     const line = lineOf(requestOf(rc));
-    const settled = credits.filter((c) => c.receipt_id === rc.id && c.status === "recorded").reduce((s, c) => s + c.amount_cents, 0)
-      + refunds.filter((r) => r.receipt_id === rc.id).reduce((s, r) => s + r.amount_cents, 0);
-    const remainingValue = Math.max(0, rc.quantity * line.price_cents - settled);
-    const unpaid = Math.max(0, inv.total_cents - inv.paid_cents - postedCredits(inv.id));
-    const refundable = Math.max(0, inv.paid_cents - refundedOn(inv.id));
-    return { maxCredit: Math.min(remainingValue, unpaid), maxRefund: Math.min(remainingValue, refundable) };
+    const used = credits.filter((c) => c.receipt_id === rc.id && c.status !== "cancelled").reduce((s, c) => s + c.amount_cents, 0);
+    return { available: Math.max(0, Math.min(rc.quantity * line.price_cents, inv.paid_cents) - used) };
   }
 
   /* ----- New customer return (app/customer-returns.tsx) ----- */
@@ -955,57 +993,66 @@ export default function DirectorLesson7Simulator() {
     attempt({ type: "print", receipt: rc }, () => setRecNotice("In real Luna this opens the Customer Return Receipt in a new window, ready to print."));
   }
 
-  function openPanel(kind: "credit" | "refund" | "restock", rc: Receipt) {
+  function openPanel(kind: "settle" | "restock", rc: Receipt) {
     setInspectId(null);
     resetCredit(); resetRefund(); setRestockConfirmed(false); setRestockNotice("");
     setPanel({ kind, receiptId: rc.id });
+    // The amount field starts with the available return allowance.
+    if (kind === "settle") {
+      const b = basis(rc);
+      if (!("blocked" in b) && b.available > 0) setCreditValue(decimalGyd(b.available));
+    }
   }
 
-  /* ----- Credit (app/gyd-customer-credit.tsx) ----- */
+  // Task where each receipt's refund credit is prepared and approved.
+  const creditTask = (rc: Receipt) => (rc.id === SJ_RECEIPT ? 17 : 8);
+
+  /* ----- 1. Prepare refund credit (prepare_luna_paid_return_credit) ----- */
 
   function prepareCredit(event: FormEvent<HTMLFormElement>, rc: Receipt) {
     event.preventDefault();
-    if (notYet(8)) return;
-    setCreditNotice("");
+    if (notYet(creditTask(rc))) return;
+    setSettleNotice("");
     let amount = 0;
     try {
-      amount = gydCents(creditValue);
-      if (creditReason.trim().length < 10 || creditReason.trim().length > 400) throw new Error("Enter a valid GYD amount and reason of 10–400 characters.");
-      if (creditDate !== today()) throw new Error("Return credits use today’s company date.");
-      if (credits.some((c) => c.receipt_id === rc.id && c.status === "draft")) throw new Error("A return credit draft already exists for this receipt.");
       const b = basis(rc);
       if ("blocked" in b) throw new Error(b.blocked);
-      if (amount > b.maxCredit) throw new Error("Credit exceeds the unpaid balance or returned-item value.");
+      amount = gydCents(creditValue);
+      if (amount > b.available || creditReason.trim().length < 10 || creditReason.trim().length > 500) throw new Error("Choose today, a refund credit within the returned-item allowance, and a reason of 10–500 characters.");
     } catch (problem) {
-      const message = problem instanceof Error ? problem.message : "Unable to save the GYD credit.";
-      setCreditNotice(message);
+      const message = problem instanceof Error ? problem.message : "Unable to save this return action.";
+      setSettleNotice(message);
       formMiss(message);
       return;
     }
-    const id = rc.id === RIVERSIDE_RECEIPT && !credits.some((c) => c.id === "3d9b62e5") ? "3d9b62e5" : nextId();
-    const credit: Credit = { id, receipt_id: rc.id, invoice_id: invoiceOfReceipt(rc).id, date: creditDate, amount_cents: amount, reason: creditReason.trim(), status: "draft" };
+    const id = nextId();
+    const credit: Credit = { id, number: credits.length + 1, receipt_id: rc.id, invoice_id: invoiceOfReceipt(rc).id, date: today(), amount_cents: amount, reason: creditReason.trim(), status: "draft" };
     attempt({ type: "credit-prepare", receipt: rc, amount_cents: amount }, () => {
       setCredits((prev) => [credit, ...prev]);
       setChosenCredit(id); setCreditConfirmed(false); setCreditValue(""); setCreditReason("");
-      setCreditNotice("Credit draft saved. No accounting entry has been posted.");
+      setSettleNotice("Refund credit saved for Director approval. No payment or stock release has occurred.");
     });
   }
 
-  function creditAction(kind: "post" | "cancel") {
+  /* ----- 2. Director approval (post_luna_paid_return_credit / cancel_luna_paid_return_credit) ----- */
+
+  function creditAction(kind: "post" | "cancel", rc: Receipt) {
     const credit = credits.find((c) => c.id === chosenCredit);
-    if (!credit) return;
+    if (!credit) { setSettleNotice("Choose a saved credit draft."); return; }
     if (kind === "cancel") {
       setCredits((prev) => prev.map((c) => (c.id === credit.id ? { ...c, status: "cancelled" } : c)));
       setChosenCredit(null); setCreditConfirmed(false);
-      setCreditNotice("Unposted draft cancelled.");
+      setSettleNotice("Draft cancelled.");
+      const b = basis(rc);
+      if (!("blocked" in b)) setCreditValue(decimalGyd(b.available + credit.amount_cents));
       return;
     }
-    if (notYet(9)) return;
-    if (!creditConfirmed) { setCreditNotice("Only a Director can approve and post a confirmed credit."); return; }
+    if (notYet(creditTask(rc) + (rc.id === SJ_RECEIPT ? 0 : 1))) return;
+    if (!creditConfirmed) { setSettleNotice("Director confirmation is required."); return; }
     attempt({ type: "credit-post", credit }, () => {
       setCredits((prev) => prev.map((c) => (c.id === credit.id ? { ...c, status: "recorded" } : c)));
       setChosenCredit(null); setCreditConfirmed(false);
-      setCreditNotice("GYD credit posted and confirmed.");
+      setSettleNotice("Refund credit approved. EMS now owes this amount to the customer. Record the refund only after payment.");
     });
   }
 
@@ -1022,7 +1069,7 @@ export default function DirectorLesson7Simulator() {
   }
 
   function releaseStock(rc: Receipt) {
-    if (notYet(13)) return;
+    if (notYet(15)) return;
     const plan = restockPlan(rc);
     if ("error" in plan) { setRestockNotice(plan.error); formMiss(plan.error); return; }
     if (!restockConfirmed) return;
@@ -1034,35 +1081,41 @@ export default function DirectorLesson7Simulator() {
     });
   }
 
-  /* ----- Refund (app/gyd-customer-return-refund.tsx) ----- */
+  /* ----- 3. Record an actual refund payment (preview/record_luna_approved_return_refund) ----- */
+
+  function choosePayment(credit: Credit) {
+    setPayCreditId(credit.id);
+    setRefundValue(decimalGyd(stillPayable(credit)));
+    setRefundPlan(null); setRefundConfirmed(false);
+  }
 
   function previewRefund(event: FormEvent<HTMLFormElement>, rc: Receipt) {
     event.preventDefault();
-    // A refund tried during an earlier task gets that task's explanation (e.g. "use a credit for Riverside").
-    if (step < 15 && mission?.kind === "do" && !advanceReady) {
-      const hint = mission.check({ type: "refund-preview", receipt: rc, amount_cents: 0, bank: "", method: "", reference: "" });
-      if (typeof hint === "string") { miss([hint, "Re-read the task and try again."]); return; }
+    // St. Jude's transfer hasn't gone out yet in this lesson.
+    if (rc.id === SJ_RECEIPT) {
+      const lines = ["St. Jude hasn't been paid yet. Accounts will send the transfer next week.", "Leave RCN-00002 showing “Refund still payable”. Record a refund payment only after the money has actually gone out."];
+      if (mission && !advanceReady) miss(lines); else setFeedback({ tone: "bad", lines });
+      return;
     }
-    if (notYet(15)) return;
-    setRefundNotice("");
+    if (notYet(11)) return;
+    setSettleNotice("");
+    const credit = credits.find((c) => c.id === payCreditId);
     let amount = 0;
     try {
+      if (!credit || credit.status !== "recorded") throw new Error("A Director must approve and post the refund credit before payment is recorded.");
       amount = gydCents(refundValue);
-      if (!refundBank) throw new Error("Choose an active GYD bank account.");
+      if (amount > stillPayable(credit)) throw new Error("Enter today and an actual refund within the approved outstanding amount.");
       const ref = refundRef.trim();
-      if (ref.length < 3 || ref.length > 100 || refundReason.trim().length < 10 || refundReason.trim().length > 500) throw new Error("Enter a method, actual refund reference of 3–100 characters, and reason of 10–500 characters.");
-      if (refundDate !== today()) throw new Error("Refunds use today’s company date.");
-      const b = basis(rc);
-      if ("blocked" in b) throw new Error(b.blocked);
-      if (amount > b.maxRefund) throw new Error("Refund exceeds the received cash or returned-item allowance.");
-      if (refunds.some((r) => r.bank === refundBank && r.reference === ref)) throw new Error("This refund reference is already recorded for the selected account.");
+      if (ref.length < 3 || ref.length > 100 || refundReason.trim().length < 10 || refundReason.trim().length > 500) throw new Error("Enter the payment method, actual payment reference and reason.");
+      if (!refundBank) throw new Error("Choose an active GYD bank account.");
+      if (refunds.some((r) => r.bank === refundBank && r.reference.toLowerCase() === ref.toLowerCase())) throw new Error("This actual refund reference was already recorded for this account.");
     } catch (problem) {
-      const message = problem instanceof Error ? problem.message : "Unable to prepare GYD refund review.";
-      setRefundNotice(message);
+      const message = problem instanceof Error ? problem.message : "Unable to save this return action.";
+      setSettleNotice(message);
       formMiss(message);
       return;
     }
-    const plan = { receipt_id: rc.id, date: refundDate, amount_cents: amount, bank: refundBank, method: refundMethod, reference: refundRef.trim(), reason: refundReason.trim() };
+    const plan = { credit_id: credit!.id, receipt_id: rc.id, date: today(), amount_cents: amount, bank: refundBank, method: refundMethod, reference: refundRef.trim(), reason: refundReason.trim() };
     attempt({ type: "refund-preview", receipt: rc, amount_cents: amount, bank: refundBank, method: refundMethod, reference: plan.reference }, () => {
       setRefundPlan(plan);
       setRefundConfirmed(false);
@@ -1070,14 +1123,13 @@ export default function DirectorLesson7Simulator() {
   }
 
   function recordRefund(rc: Receipt) {
-    if (!refundPlan || !refundConfirmed) return;
-    if (notYet(16)) return;
+    if (!refundPlan || !refundConfirmed) { setSettleNotice("Confirm that the refund was actually paid."); return; }
+    if (notYet(12)) return;
     const plan = refundPlan;
     attempt({ type: "refund-record", receipt: rc }, () => {
       setRefunds((prev) => [{ id: "e17c4a90", invoice_id: invoiceOfReceipt(rc).id, ...plan }, ...prev]);
-      setRefundPlan(null); setRefundConfirmed(false);
-      setRefundValue(""); setRefundBank(""); setRefundMethod("bank_transfer"); setRefundRef(""); setRefundReason("");
-      setRefundNotice("The GYD refund was recorded and confirmed.");
+      resetRefund();
+      setSettleNotice("Actual refund recorded against the approved credit. Sales were not reversed again.");
     });
   }
 
@@ -1298,8 +1350,8 @@ export default function DirectorLesson7Simulator() {
                       {!canReviewReturnSettlement(rc)
                         ? <button type="button" className="lsim-pbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Complete inspection first</button>
                         : <>
-                          <button type="button" className="lsim-pbtn" onClick={() => openPanel("credit", rc)}>Review customer credit</button>
-                          <button type="button" className="lsim-sbtn" onClick={() => openPanel("refund", rc)}>Record customer refund</button>
+                          <button type="button" className="lsim-pbtn" onClick={() => openPanel("settle", rc)}>Review refund credit</button>
+                          <button type="button" className="lsim-sbtn" onClick={() => openPanel("settle", rc)}>Record customer refund</button>
                         </>}
                       {(rc.restock || latest?.decision === "eligible_for_restock") && <button type="button" className="lsim-sbtn" onClick={() => openPanel("restock", rc)}>{rc.restock ? "View saved stock release" : "Review stock release"}</button>}
                     </>
@@ -1323,8 +1375,7 @@ export default function DirectorLesson7Simulator() {
         <p style={{ fontSize: 13 }}>{list.length} receipt(s). Showing up to 25 per page.</p>
 
         {inspecting && renderInspection(inspecting)}
-        {flow === "resolve" && panel && panelReceipt && panel.kind === "credit" && renderCredit(panelReceipt)}
-        {flow === "resolve" && panel && panelReceipt && panel.kind === "refund" && renderRefund(panelReceipt)}
+        {flow === "resolve" && panel && panelReceipt && panel.kind === "settle" && renderSettlement(panelReceipt)}
         {flow === "resolve" && panel && panelReceipt && panel.kind === "restock" && renderRestock(panelReceipt)}
       </div>
     );
@@ -1369,110 +1420,105 @@ export default function DirectorLesson7Simulator() {
     );
   }
 
-  function renderCredit(rc: Receipt) {
+  // app/paid-customer-return-settlement.tsx
+  function renderSettlement(rc: Receipt) {
     const b = basis(rc);
-    const notes = credits.filter((c) => c.receipt_id === rc.id);
+    const notes = credits.filter((c) => c.receipt_id === rc.id).sort((x, y) => y.number - x.number);
     const chosen = credits.find((c) => c.id === chosenCredit && c.status === "draft") ?? null;
-    const canCreate = !("blocked" in b) && b.maxCredit > 0;
+    const paying = credits.find((c) => c.id === payCreditId) ?? null;
+    const payments = refunds.filter((r) => r.receipt_id === rc.id);
+    const rcn = (c: Credit) => `RCN-${String(c.number).padStart(5, "0")}`;
+    const bankName = (id: string) => gydBanks.find((x) => x.id === id)?.account ?? "";
     return (
-      <section className="lsim-sub" aria-label="Customer credit notes">
-        <h3>Customer credit notes</h3>
+      <section className="lsim-sub" aria-label="Paid-sale return — refund to customer (GYD)">
+        <h3>Paid-sale return — refund to customer (GYD)</h3>
+        <p>The original sale was paid before delivery. A Director-approved credit creates a refund payable to the customer. Recording the later payment clears that payable; it does not reduce the invoice balance or reverse sales again.</p>
         <p role="status">Only Directors can approve and post credit notes.</p>
-        <p>Credit the inspected returned item against the unpaid GYD invoice. Only a Director can approve and post it.</p>
+        <button type="button" className="lsim-sbtn" onClick={() => setSettleNotice("")}>Refresh refund credits</button>
+        {settleNotice && <p className={`lsim-status ${isError(settleNotice) ? "error" : ""}`} role="status">{settleNotice}</p>}
         {"blocked" in b && <p role="status">{b.blocked}</p>}
-        {!("blocked" in b) && <p>Maximum return credit: {money(b.maxCredit)}.</p>}
-        {canCreate && !chosen && (
+
+        {!("blocked" in b) && b.available > 0 && !chosen && (
           <form className="lsim-form" onSubmit={(e) => prepareCredit(e, rc)} noValidate>
-            <div className="lsim-fields">
-              <label>Credit date<input type="date" value={creditDate} onChange={(e) => setCreditDate(e.target.value)} /></label>
-              <label>Credit amount (GYD)<input inputMode="decimal" value={creditValue} onChange={(e) => setCreditValue(e.target.value)} /></label>
-            </div>
-            <label style={{ display: "block", marginTop: 8 }}>Reason<textarea maxLength={500} value={creditReason} onChange={(e) => setCreditReason(e.target.value)} /></label>
-            <button className="lsim-sbtn" style={{ marginTop: 8 }}>Save credit draft for review</button>
+            <h4 style={{ marginTop: 10 }}>1. Prepare refund credit</h4>
+            <p>Available return allowance: {money(b.available)}. Credit date: {today()}.</p>
+            <label style={{ display: "block" }}>Refund credit amount (GYD)<input inputMode="decimal" value={creditValue} onChange={(e) => setCreditValue(e.target.value)} /></label>
+            <label style={{ display: "block", marginTop: 8 }}>Reason for refund credit<textarea maxLength={500} value={creditReason} onChange={(e) => setCreditReason(e.target.value)} /></label>
+            <button className="lsim-pbtn" style={{ marginTop: 8 }}>Save refund credit for Director</button>
           </form>
         )}
-        {!canCreate && !chosen && <p>No return credit is currently available.</p>}
-        <h4 style={{ marginTop: 10 }}>Credit history</h4>
-        {notes.length ? (
-          <ul className="lsim-history">{notes.map((n) => (
-            <li key={n.id}>CN-{n.id} · {n.date} · {money(n.amount_cents)} · {n.status}<br />{n.reason}{" "}
-              {n.status === "draft" && <button type="button" className="lsim-sbtn" onClick={() => { setChosenCredit(n.id); setCreditConfirmed(false); }}>Review draft</button>}
-              {n.status === "recorded" && <button type="button" className="lsim-sbtn" onClick={() => setCreditNotice("In real Luna this opens the GYD credit note in a new window, ready to print.")}>Print credit note</button>}
-            </li>
-          ))}</ul>
-        ) : <p>No GYD credit notes for this invoice.</p>}
+
+        <h4 style={{ marginTop: 10 }}>Refund credit history</h4>
+        {notes.length ? notes.map((n) => (
+          <div key={n.id} className="lsim-sub" aria-label={rcn(n)}>
+            <p><strong>{rcn(n)}</strong> · {money(n.amount_cents)} · {n.status === "recorded" ? "Director approved" : n.status}<br />{n.reason}</p>
+            {n.status === "draft" && <button type="button" className="lsim-sbtn" onClick={() => { setChosenCredit(n.id); setCreditConfirmed(false); }}>Review refund credit</button>}
+            {n.status === "recorded" && (
+              <>
+                <p>Refund still payable: {money(stillPayable(n))}</p>
+                <div className="lsim-actions">
+                  {stillPayable(n) > 0 && <button type="button" className="lsim-pbtn" onClick={() => choosePayment(n)}>Record payment for this credit</button>}
+                  <button type="button" className="lsim-sbtn" onClick={() => setSettleNotice("In real Luna this opens the refund credit note in a new window, ready to print.")}>Print refund credit note</button>
+                </div>
+              </>
+            )}
+          </div>
+        )) : <p>No refund credit has been prepared for this receipt.</p>}
+
         {chosen && (
-          <section className="lsim-sub" aria-label="Review GYD credit">
-            <h4>Review unposted credit</h4>
-            <p>CN-{chosen.id} · {chosen.date} · {money(chosen.amount_cents)}<br />{chosen.reason}</p>
-            <label className="lsim-check"><input type="checkbox" checked={creditConfirmed} onChange={(e) => setCreditConfirmed(e.target.checked)} /> I confirm this credit and authorize the accounting adjustment.</label>
+          <section className="lsim-sub" aria-label="2. Director approval">
+            <h4>2. Director approval</h4>
+            <p>{money(chosen.amount_cents)} — {chosen.reason}</p>
+            <label className="lsim-check"><input type="checkbox" checked={creditConfirmed} onChange={(e) => setCreditConfirmed(e.target.checked)} /> I approve this return credit and the amount EMS owes the customer.</label>
             <div className="lsim-actions">
-              <button type="button" className="lsim-pbtn" disabled={!creditConfirmed} onClick={() => creditAction("post")}>Post reviewed credit</button>
-              <button type="button" className="lsim-sbtn" onClick={() => creditAction("cancel")}>Cancel draft</button>
+              <button type="button" className="lsim-pbtn" disabled={!creditConfirmed} onClick={() => creditAction("post", rc)}>Approve refund credit</button>
+              <button type="button" className="lsim-sbtn" onClick={() => creditAction("cancel", rc)}>Cancel credit draft</button>
             </div>
           </section>
         )}
-        {creditNotice && <p className={`lsim-status ${isError(creditNotice) ? "error" : ""}`} role="status">{creditNotice}</p>}
-      </section>
-    );
-  }
 
-  function renderRefund(rc: Receipt) {
-    const b = basis(rc);
-    const history = refunds.filter((r) => r.receipt_id === rc.id);
-    const bankLabel = (id: string) => gydBanks.find((x) => x.id === id)?.account ?? "Bank unavailable";
-    return (
-      <section className="lsim-sub" aria-label="Customer refund (GYD)">
-        <h4>Customer refund (GYD)</h4>
-        <p>Record a refund after the customer has actually been paid. Review the amount, bank account and reference before recording it.</p>
-        {"blocked" in b && <p role="status">{b.blocked}</p>}
-        {!("blocked" in b) && <p>Maximum refund for this return: <strong>{money(b.maxRefund)}</strong>.</p>}
-        {!("blocked" in b) && b.maxRefund > 0 && !refundPlan && (
-          <form className="lsim-form" onSubmit={(e) => previewRefund(e, rc)} noValidate>
+        {paying && !refundPlan && (
+          <form className="lsim-form lsim-sub" onSubmit={(e) => previewRefund(e, rc)} noValidate aria-label="3. Record an actual refund payment">
+            <h4>3. Record an actual refund payment</h4>
+            <p>Record this only after the customer has been paid. Date: {today()}.</p>
             <div className="lsim-fields">
-              <label>Refund date<input type="date" value={refundDate} onChange={(e) => setRefundDate(e.target.value)} /></label>
-              <label>Amount refunded (GYD)<input inputMode="decimal" value={refundValue} onChange={(e) => setRefundValue(e.target.value)} /></label>
-              <label>GYD bank account
+              <label>Amount actually refunded (GYD)<input inputMode="decimal" value={refundValue} onChange={(e) => setRefundValue(e.target.value)} /></label>
+              <label>GYD payment account
                 <select value={refundBank} onChange={(e) => setRefundBank(e.target.value)}>
-                  <option value="">Choose a GYD bank account</option>
+                  <option value="">Choose a GYD account</option>
                   {gydBanks.map((x) => <option key={x.id} value={x.id}>{x.institution} — {x.account}</option>)}
                 </select>
               </label>
-              <label>Payment method
+              <label>Refund payment method
                 <select value={refundMethod} onChange={(e) => setRefundMethod(e.target.value)}>
-                  <option value="bank_transfer">Bank transfer</option>
-                  <option value="cash">Cash</option>
-                  <option value="check">Check</option>
-                  <option value="credit_card">Credit card</option>
-                  <option value="other">Other</option>
+                  {["bank_transfer", "cash", "check", "credit_card", "other"].map((v) => <option key={v} value={v}>{v.replaceAll("_", " ")}</option>)}
                 </select>
               </label>
-              <label>Actual refund reference<input maxLength={100} value={refundRef} onChange={(e) => setRefundRef(e.target.value)} /></label>
+              <label>Actual refund payment reference<input maxLength={100} value={refundRef} onChange={(e) => setRefundRef(e.target.value)} /></label>
             </div>
-            <label style={{ display: "block", marginTop: 8 }}>Reason<textarea maxLength={500} value={refundReason} onChange={(e) => setRefundReason(e.target.value)} /></label>
-            <button className="lsim-sbtn" style={{ marginTop: 8 }}>Review refund</button>
+            <label style={{ display: "block", marginTop: 8 }}>Payment notes<textarea maxLength={500} value={refundReason} onChange={(e) => setRefundReason(e.target.value)} /></label>
+            <button className="lsim-sbtn" style={{ marginTop: 8 }}>Review approved refund payment</button>
           </form>
         )}
+
         {refundPlan && (
-          <section className="lsim-sub">
-            <h4>Review actual customer refund</h4>
-            <p>{money(refundPlan.amount_cents)} · {refundPlan.date} · {bankLabel(refundPlan.bank)}<br />Reference: {refundPlan.reference}<br />{refundPlan.reason}</p>
+          <section className="lsim-sub" aria-label="Review actual refund payment">
+            <h4>Review actual refund payment</h4>
+            <p>{money(refundPlan.amount_cents)} · {bankName(refundPlan.bank)}<br />{refundPlan.reference}</p>
             <label className="lsim-check"><input type="checkbox" checked={refundConfirmed} onChange={(e) => setRefundConfirmed(e.target.checked)} /> I confirm this refund has actually been paid to the customer.</label>
             <div className="lsim-actions">
-              <button type="button" className="lsim-pbtn" disabled={!refundConfirmed} onClick={() => recordRefund(rc)}>Record confirmed refund</button>
-              <button type="button" className="lsim-sbtn" onClick={() => { setRefundPlan(null); setRefundConfirmed(false); }}>Change details</button>
+              <button type="button" className="lsim-pbtn" disabled={!refundConfirmed} onClick={() => recordRefund(rc)}>Record approved refund payment</button>
+              <button type="button" className="lsim-sbtn" onClick={() => { setRefundPlan(null); setRefundConfirmed(false); }}>Change payment details</button>
             </div>
           </section>
         )}
-        <h4 style={{ marginTop: 10 }}>Refund history</h4>
-        {history.length ? (
-          <ul className="lsim-history">{history.map((r) => (
-            <li key={r.id}>{r.date} · {money(r.amount_cents)} · {r.method.replaceAll("_", " ")} · {r.reference}{" "}
-              <button type="button" className="lsim-sbtn" onClick={() => setRefundNotice("In real Luna this opens the refund receipt in a new window, ready to print.")}>Print refund receipt</button>
-            </li>
-          ))}</ul>
-        ) : <p>No GYD refunds recorded for this return.</p>}
-        {refundNotice && <p className={`lsim-status ${isError(refundNotice) ? "error" : ""}`} role="status">{refundNotice}</p>}
+
+        <h4 style={{ marginTop: 10 }}>Refund payments</h4>
+        {payments.length ? payments.map((f) => (
+          <p key={f.id}>{f.date} · {money(f.amount_cents)} · {f.reference}{" "}
+            <button type="button" className="lsim-sbtn" onClick={() => setSettleNotice("In real Luna this opens the refund receipt in a new window, ready to print. It names the approved return credit it pays.")}>Print refund receipt</button>
+          </p>
+        )) : <p>No payment has been recorded for these refund credits.</p>}
       </section>
     );
   }
@@ -1559,7 +1605,7 @@ export default function DirectorLesson7Simulator() {
         {finished ? (
           <div className="lsim-feedback good" style={{ gridColumn: "1 / -1" }}>
             <p><strong>Lesson 7 complete.</strong></p>
-            <p>You can now follow Luna&apos;s 4 guided return steps: take a customer return from request to authorization, receive it into quarantine against the original lot, and inspect it. You can settle it with a credit when the customer still owes money, or with a refund when they&apos;ve already paid. You can also release eligible goods back to stock at their original cost.</p>
+            <p>You can now follow Luna&apos;s 4 guided return steps: take a customer return from request to authorization, receive it into quarantine against the original lot, and inspect it. Because every sale is paid in full before it ships, you settle each return with a refund credit that a Director approves, then record the actual payment once the money has gone out. You can also release eligible goods back to stock at their original cost.</p>
             <p>Next: Lesson 8 covers supplier returns and settlement.</p>
             <p role="status">
               {saveStatus === "saving" && "Saving your completion…"}

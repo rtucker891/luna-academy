@@ -27,7 +27,8 @@ import { formStyles } from "./director-lesson2-simulator";
   app/use-director-credit-approval.ts, database/customer-return-receiving.sql,
   database/customer-invoice-before-shipment.sql, database/gyd-customer-returns-draft.sql,
   database/luna-authorization-levels.sql, database/assistant-bookkeeper-access.sql,
-  docs/customer-return-*.md). Records, bank accounts and references are fictional
+  accounting/customer-return-workflow.ts, docs/customer-return-guide.md and
+  docs/customer-return-*.md; guided flow as of Luna d4ed138). Records, bank accounts and references are fictional
   and live only in this browser tab.
 */
 
@@ -157,6 +158,17 @@ function disposition(value: Decision) {
   return value === "eligible_for_restock" ? "Eligible for a separate restock review — still quarantined" : value === "ineligible" ? "Ineligible for restock — still quarantined" : "On hold — quarantined";
 }
 
+// accounting/customer-return-workflow.ts
+type ReturnStep = "receive" | "resolve" | "print";
+function returnNeedsInspection(rc: Receipt) {
+  const latest = rc.inspections[rc.inspections.length - 1];
+  return !rc.restock && (!latest || latest.decision === "hold" || latest.condition === "unknown");
+}
+function canReviewReturnSettlement(rc: Receipt) {
+  const latest = rc.inspections[rc.inspections.length - 1];
+  return Boolean(latest && latest.decision !== "hold" && latest.condition !== "unknown");
+}
+
 const isError = (text: string) => !/^(Return draft saved|Return authorized|Return draft cancelled|Physical receipt saved|Inspection saved|Credit draft saved|GYD credit posted|Unposted draft cancelled|Returned goods released|The GYD refund was recorded|In real Luna)/.test(text);
 
 /* ---------- Missions ---------- */
@@ -173,7 +185,8 @@ type Event =
   | { type: "credit-post"; credit: Credit }
   | { type: "restock"; receipt: Receipt }
   | { type: "refund-preview"; receipt: Receipt; amount_cents: number; bank: string; method: string; reference: string }
-  | { type: "refund-record"; receipt: Receipt };
+  | { type: "refund-record"; receipt: Receipt }
+  | { type: "print"; receipt: Receipt };
 
 type Mission =
   | { kind: "do"; prompt: string; details?: string[]; check: (e: Event) => string | null | undefined; learn: string[] }
@@ -186,12 +199,12 @@ const missions: Mission[] = [
     check: (e) => (e.type !== "navigate" ? undefined : e.section === "Customer Returns" ? null : `You opened ${e.section}. Goods coming back from a customer are handled in Customer Returns.`),
     learn: [
       "Customer Returns handles goods coming back from customers. Supplier Returns is the opposite direction: goods you send back to a vendor.",
-      "Luna's order of work for a return is: return request, approval, physical receipt into quarantine, inspection, then a credit or a refund. Putting stock back on the shelf is its own separate step.",
+      "Luna now guides every return through 4 numbered steps: 1. Select item & authorize → 2. Receive & inspect → 3. Stock & customer balance → 4. Review & print. Luna moves you to the next step automatically after each save.",
     ],
   },
   {
     kind: "do",
-    prompt: "Under “New customer return”, choose Riverside Family Clinic in “Customer”, then choose SO-00026 in “Customer order”.",
+    prompt: "At the top of Customer Returns, choose Riverside Family Clinic in “Customer”, then choose SO-00026 in “Customer order”.",
     check: (e) => {
       if (e.type !== "order-select") return undefined;
       if (e.invoice.id !== "i30") return `You opened ${soNumber(e.invoice.so)} for ${e.invoice.customer}. The crushed syringes came on SO-00026 for Riverside Family Clinic.`;
@@ -204,7 +217,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "In “Prepare a return item”, enter the returned syringes and click “Save Draft”.",
+    prompt: "Under the order, in “1. Select the returned item”, enter the returned syringes and click “Save return & review”.",
     details: [
       "Product: ACS-SYR-5ML — Syringe 5 mL, luer lock",
       "Return quantity: 3",
@@ -220,7 +233,8 @@ const missions: Mission[] = [
       return null;
     },
     learn: [
-      "Luna confirmed: “Return draft saved. Open it below to review and approve.”",
+      "Luna confirmed: “Return draft saved. Review and authorize it below to continue.”",
+      "Luna opened the saved return straight away under “1. Review & authorize return”. You don't have to look for it in a list.",
       "“Reported damaged” records what the customer told you. It isn't a finding yet. The inspection after the goods arrive decides what really happened.",
     ],
   },
@@ -228,33 +242,33 @@ const missions: Mission[] = [
     kind: "choice",
     prompt: "The return is saved as a draft. What has that changed so far?",
     options: [
-      { text: "Riverside's balance has already gone down by the value of the 3 boxes", correct: false, why: "Not quite. No credit exists yet. The balance only changes when a Director posts a credit, several steps from now." },
-      { text: "Nothing in stock, accounts or the customer's balance. It's only a saved request waiting for approval", correct: true, why: "Correct. A draft only records the request. Approval, receiving, inspection and any credit are all separate steps." },
+      { text: "Riverside's balance has already gone down by the value of the 3 boxes", correct: false, why: "Not quite. No credit exists yet. The balance only changes when a Director posts a credit in step 3." },
+      { text: "Nothing in stock, accounts or the customer's balance. It's only a saved request waiting for authorization", correct: true, why: "Correct. A draft only records the request. Authorization, receiving, inspection and any credit are all separate steps." },
       { text: "The 3 boxes have been added back to stock", correct: false, why: "Not quite. Nothing has even arrived yet. Returned goods never go straight back into stock in Luna; they're quarantined and inspected first." },
     ],
     learn: ["Each step in a Luna return does one thing only, so you can always see exactly where a return is."],
   },
   {
     kind: "do",
-    prompt: "In “Return request history”, click “Open review” on the Riverside return. Tick the authorization box and click “Approve return request”.",
+    prompt: "Under “1. Review & authorize return”, check the details, tick the box that starts “I reviewed this item and quantity…” and click “Authorize return & continue”.",
     check: (e) => {
       if (e.type !== "approve") return undefined;
-      if (e.request.id !== RIVERSIDE_REQUEST) return `You approved RET-${e.request.id}. Approve the return you just saved for Riverside's syringes.`;
+      if (e.request.id !== RIVERSIDE_REQUEST) return `You authorized RET-${e.request.id}. Authorize the return you just saved for Riverside's syringes.`;
       return null;
     },
     learn: [
-      "Luna confirmed: “Return authorized. No goods have been received, restocked or credited by this action.”",
-      "Approval reserves the 3 boxes against this invoice line, so nobody can authorize returning the same boxes twice. The status now reads “Authorized — open receiving status”.",
+      "Luna confirmed: “Return authorized. Continue with Receive & inspect below. Stock and the customer balance have not changed.”",
+      "The heading changed to “Return progress”, and “2. Receive & inspect” is now highlighted. Authorization reserves the 3 boxes against this invoice line, so nobody can authorize returning the same boxes twice.",
     ],
   },
   {
     kind: "do",
-    prompt: "The 3 crushed boxes have arrived at your warehouse. In “Receive into quarantine”, record the physical receipt.",
+    prompt: "The 3 crushed boxes have arrived at your warehouse. Below the step buttons, in “Receive into quarantine”, record the physical receipt and click “Save receipt & inspect”.",
     details: [
-      "Original shipment lot: TR-LOT-0231",
+      "Original shipment lot: TR-LOT-0231 (Luna already picked it, because it's the only lot these syringes shipped from)",
       "Quantity physically received: 3",
       "Receiving notes: at least 10 characters, for example “3 crushed boxes counted, placed in quarantine.”",
-      "Tick the box confirming you counted the goods, then click “Record physical receipt”",
+      "Tick the box confirming you counted the goods",
     ],
     check: (e) => {
       if (e.type !== "receive") return undefined;
@@ -265,12 +279,12 @@ const missions: Mission[] = [
     },
     learn: [
       "Luna confirmed: “Physical receipt saved in quarantine. Saleable stock, inventory value and the customer balance have not changed.”",
-      "Quarantine means the boxes are in your building but not available to sell. Matching them to the original lot keeps tracing intact if there's ever a product recall.",
+      "Luna opened the inspection form for these 3 boxes straight away. Quarantine means the boxes are in your building but not available to sell. Matching them to the original lot keeps tracing intact if there's ever a product recall.",
     ],
   },
   {
     kind: "do",
-    prompt: "In the workspace below, scroll down inside the open RET-8a41f0c7 review, past “Receive and inspect returned goods”, to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0231” and click its “Open inspection” button. Record what you found and click “Save inspection”.",
+    prompt: "Luna opened “Inspect 3 unit(s) from TR-LOT-0231” just below the “Lot TR-LOT-0231” box. Record what you found and click “Save inspection & continue”.",
     details: [
       "Observed condition: Damaged",
       "Tick “Product, original lot and item identity verified”",
@@ -282,27 +296,27 @@ const missions: Mission[] = [
       if (e.type !== "inspect") return undefined;
       if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Inspect Riverside's syringe receipt (lot TR-LOT-0231).";
       if (e.condition !== "damaged") return `You recorded the condition as ${conditionText(e.condition)}. The cartons are crushed, so choose “Damaged”.`;
-      if (e.decision === "hold") return "“Keep on hold” is for batches you can't decide on yet. It blocks any credit until a later inspection. These boxes are clearly crushed, so choose “Ineligible for restock”.";
+      if (e.decision === "hold") return "“Keep on hold” is for batches you can't decide on yet. It keeps the return in step 2 and blocks any credit. These boxes are clearly crushed, so choose “Ineligible for restock”.";
       return null;
     },
     learn: [
       "Luna confirmed: “Inspection saved. The goods remain quarantined, including items marked eligible for restock. No stock release, credit, refund or disposal was performed.”",
-      "Luna only allows “Eligible for a separate restock review” for unopened goods with verified identity and storage history. Damaged goods can never be marked eligible.",
+      "Because you made a decision, Luna moved you on to “3. Stock & customer balance”. Damaged goods can never be marked eligible: Luna only allows that for unopened goods with verified identity and storage history.",
     ],
   },
   {
     kind: "choice",
-    prompt: "You marked the syringes “Ineligible for restock”. What does that mean?",
+    prompt: "The “Lot TR-LOT-0231” box now reads “Not eligible for resale. Financial settlement can be reviewed separately.” What does that mean?",
     options: [
-      { text: "Luna has recorded them as thrown away", correct: false, why: "Not quite. Luna's inspection screen says “Ineligible” does not record disposal. Disposal is handled separately." },
-      { text: "They stay quarantined and won't go back into stock, but Riverside can still be credited", correct: true, why: "Correct. The decision only controls restocking. Any inspection decision other than “Keep on hold” lets the credit or refund go ahead." },
-      { text: "Riverside can't get anything back because the goods can't be resold", correct: false, why: "Not quite. Whether you can resell the goods and whether the customer gets a credit are separate questions. A completed inspection unlocks the credit either way." },
+      { text: "Luna has recorded the boxes as thrown away", correct: false, why: "Not quite. Luna's inspection screen says “Ineligible” does not record disposal. Disposal is handled separately." },
+      { text: "They stay quarantined and won't go back into stock, but Riverside can still be credited", correct: true, why: "Correct. The decision only controls restocking. Any decision other than “Keep on hold” unlocks the credit and refund buttons." },
+      { text: "Riverside can't get anything back because the goods can't be resold", correct: false, why: "Not quite. Whether you can resell the goods and whether the customer is settled are separate questions. That's why the box still shows “Review customer credit”." },
     ],
-    learn: ["“Ineligible for restock” is about the goods. Whether the customer is credited is decided separately, in the credit step."],
+    learn: ["“Ineligible for restock” is about the goods. Whether the customer is credited is decided separately, in step 3."],
   },
   {
     kind: "do",
-    prompt: "In the workspace below, scroll down inside the open RET-8a41f0c7 review, past “Receive and inspect returned goods”, to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0231” and click its “Return credit” button. Save a credit draft for the full value of the 3 boxes.",
+    prompt: "You're on “3. Stock & customer balance”. In the box headed “Lot TR-LOT-0231”, click “Review customer credit”. Save a credit draft for the full value of the 3 boxes.",
     details: [
       "Credit date: today (already filled in)",
       "Credit amount (GYD): 10950.00 (or 10,950.00), which is 3 boxes × GYD 3650.00",
@@ -310,7 +324,7 @@ const missions: Mission[] = [
       "Click “Save credit draft for review”",
     ],
     check: (e) => {
-      if (e.type === "refund-preview" && e.receipt.id === RIVERSIDE_RECEIPT) return "Riverside still owes GYD 43500.00 on INV-00030, which is more than the GYD 10950.00 being returned. Reduce what they owe with “Return credit” rather than paying money out with “Cash refund”.";
+      if (e.type === "refund-preview" && e.receipt.id === RIVERSIDE_RECEIPT) return "Riverside still owes GYD 43500.00 on INV-00030, which is more than the GYD 10950.00 being returned. Reduce what they owe with “Review customer credit” rather than recording money paid out with “Record customer refund”.";
       if (e.type !== "credit-prepare") return undefined;
       if (e.receipt.id !== RIVERSIDE_RECEIPT) return "Prepare the credit on Riverside's syringe receipt (lot TR-LOT-0231).";
       if (e.amount_cents !== 1095000) return `You entered ${money(e.amount_cents)}. Credit the full returned value: 3 boxes × GYD 3650.00 = GYD 10950.00.`;
@@ -340,36 +354,36 @@ const missions: Mission[] = [
     options: [
       { text: "GYD 10950.00 was paid to Riverside from the bank", correct: false, why: "Not quite. A credit moves no money. It reduces what the customer owes." },
       { text: "Riverside now owes GYD 32550.00 on INV-00030 instead of GYD 43500.00, and no money or stock moved", correct: true, why: "Correct. The credit reduces Accounts Receivable by GYD 10950.00. The crushed boxes stay in quarantine." },
-      { text: "The 3 boxes went back into stock and Riverside's balance went down", correct: false, why: "Not quite. The balance went down, but the boxes were inspected as ineligible, so they stay quarantined." },
+      { text: "The 3 boxes went back into stock and Riverside's balance went down", correct: false, why: "Not quite. The balance went down, but the boxes were inspected as ineligible, so they stay quarantined. Luna's step 3 says it plainly: “Posting a credit does not restock goods.”" },
     ],
     learn: ["A credit note lowers the invoice balance and reverses that part of the sale in the accounts. It doesn't touch the bank or the stock."],
   },
   {
     kind: "choice",
-    prompt: "Why was a credit the right choice for Riverside, rather than a cash refund?",
+    prompt: "Why was a credit the right choice for Riverside, rather than recording a customer refund?",
     options: [
       { text: "Riverside still owed more than the returned value, so reducing what they owe settles it", correct: true, why: "Correct. They owed GYD 43500.00, more than the GYD 10950.00 returned. A refund is for money the customer has already paid you." },
-      { text: "Luna doesn't allow refunds on damaged goods", correct: false, why: "Not quite. The goods' condition doesn't decide credit or refund. What matters is whether the customer has unpaid balance or has already paid." },
+      { text: "Luna doesn't allow refunds on damaged goods", correct: false, why: "Not quite. The goods' condition doesn't decide credit or refund. What matters is whether the customer has an unpaid balance or has already paid." },
       { text: "Credits are always used before refunds", correct: false, why: "Not quite. It depends on the invoice. A fully paid invoice has no balance to reduce, so its return is settled with a refund. You'll do one next." },
     ],
     learn: ["Rule of thumb: unpaid balance → credit. Money already received → refund."],
   },
   {
     kind: "do",
-    prompt: "St. Jude Community Hospital returned 6 unopened boxes of gauze from SO-00027. The return is already received and inspected. Open SO-00027, then click “Open review” on RET-5c2e81d4.",
+    prompt: "St. Jude Community Hospital returned 6 unopened boxes of gauze from SO-00027. The return is already received and inspected. Choose St. Jude Community Hospital in “Customer” and SO-00027 in “Customer order”. Then click “Find a saved return (1)” to open the list, then click “Open review” on RET-5c2e81d4.",
     check: (e) => {
       if (e.type !== "open-review") return undefined;
       if (e.request.id !== SJ_REQUEST) return `You opened RET-${e.request.id}. Choose SO-00027 for St. Jude Community Hospital and open RET-5c2e81d4.`;
       return null;
     },
     learn: [
-      "This return was approved, received and inspected earlier. Its inspection reads “Eligible for a separate restock review — still quarantined”.",
-      "Even when goods are eligible, they stay quarantined until a Director releases them. That release is the next step.",
+      "Luna shows “Return progress”. The “Lot TR-LOT-0238” box reads “Eligible for a separate restock review — still quarantined”, and its button says “Continue to stock & settlement” because the inspection is already done.",
+      "Saved returns now sit inside “Find a saved return”, so the page stays focused on the return you're working on.",
     ],
   },
   {
     kind: "do",
-    prompt: "In the workspace below, scroll down inside the open RET-5c2e81d4 review to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0238” and click its “Review stock release” button. Read the review, tick the approval box and click “Release stock and record adjustment”.",
+    prompt: "In the box headed “Lot TR-LOT-0238”, click “Continue to stock & settlement”. Then click “Review stock release”, read the review, tick the approval box and click “Release stock and record adjustment”.",
     check: (e) => {
       if (e.type !== "restock") return undefined;
       if (e.receipt.id !== SJ_RECEIPT) return "Release St. Jude's unopened gauze (lot TR-LOT-0238).";
@@ -377,7 +391,7 @@ const missions: Mission[] = [
     },
     learn: [
       "Luna confirmed: “Returned goods released to saleable stock. The inventory and accounting changes were saved together.”",
-      "Saleable gauze went from 54 to 60 boxes. A receipt can only be released once.",
+      "Saleable gauze went from 54 to 60 boxes. A receipt can only be released once. “Review stock release” only appears for goods inspected as eligible.",
     ],
   },
   {
@@ -385,14 +399,14 @@ const missions: Mission[] = [
     prompt: "The release review showed “Exact cost restored: USD 25.50”. What did the release record?",
     options: [
       { text: "A debit to Inventory (1200) and a credit to Cost of Goods Sold (5000) at the original cost, with no change to what St. Jude owes", correct: true, why: "Correct. The boxes go back at what they cost you, not the selling price. The customer's money is handled separately." },
-      { text: "A GYD 8100.00 refund to St. Jude", correct: false, why: "Not quite. Restocking only deals with stock and its cost. The refund is a separate step." },
+      { text: "A GYD 8100.00 refund to St. Jude, so the return is now finished", correct: false, why: "Not quite. Restocking only deals with stock and its cost. Luna never treats a restocked receipt as settled; the refund is a separate step." },
       { text: "A credit to Sales Revenue at the selling price", correct: false, why: "Not quite. Restocking uses the original cost, USD 4.25 a box. The selling price matters only for the credit or refund." },
     ],
-    learn: ["The review shows this cost in USD because that's the currency the lot was bought in. Lesson 5 covered how Luna keeps lot costs."],
+    learn: ["A restocked receipt can still need its credit or refund. The review shows the cost in USD because that's the currency the lot was bought in (Lesson 5)."],
   },
   {
     kind: "do",
-    prompt: "St. Jude paid INV-00031 in full, so they get their money back. Your bank sent the transfer this morning. in the workspace below, scroll down inside the open RET-5c2e81d4 review to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0238” and click its “Cash refund” button. Fill in the form and click “Review refund”.",
+    prompt: "St. Jude paid INV-00031 in full, so they get their money back. Your bank sent the transfer this morning. In the same “Lot TR-LOT-0238” box, click “Record customer refund”. Fill in the form and click “Review refund”.",
     details: [
       "Amount refunded (GYD): 8100.00 (or 8,100.00), which is 6 boxes × GYD 1350.00",
       "GYD bank account: Republic Bank — Operating Account (GYD)",
@@ -401,7 +415,7 @@ const missions: Mission[] = [
       "Reason: at least 10 characters, for example “Refund for 6 unopened boxes of gauze returned.”",
     ],
     check: (e) => {
-      if (e.type === "credit-prepare" && e.receipt.id === SJ_RECEIPT) return "St. Jude has no unpaid balance to reduce. Use “Cash refund”.";
+      if (e.type === "credit-prepare" && e.receipt.id === SJ_RECEIPT) return "St. Jude has no unpaid balance to reduce. Use “Record customer refund”.";
       if (e.type !== "refund-preview") return undefined;
       if (e.receipt.id !== SJ_RECEIPT) return "Prepare the refund on St. Jude's gauze receipt (lot TR-LOT-0238).";
       if (e.amount_cents !== 810000) return `You entered ${money(e.amount_cents)}. Refund the full returned value: 6 boxes × GYD 1350.00 = GYD 8100.00.`;
@@ -412,7 +426,7 @@ const missions: Mission[] = [
     },
     learn: [
       "Luna shows “Review actual customer refund” with the amount, date, bank account and reference. Nothing is recorded yet.",
-      "Luna capped this at “Maximum refund for this return: GYD 8100.00”, the smaller of the returned value and what St. Jude actually paid.",
+      "Luna capped this at “Maximum refund for this return: GYD 8100.00”, the smaller of the returned value and what St. Jude actually paid. The button is called “Record customer refund” because Luna records a refund that already happened, by any method. It never sends money.",
     ],
   },
   {
@@ -429,11 +443,24 @@ const missions: Mission[] = [
     ],
   },
   {
+    kind: "do",
+    prompt: "St. Jude wants a copy of the return receipt. Click the step button “4. Review & print”, then click “Print return receipt” in the “Lot TR-LOT-0238” box.",
+    check: (e) => {
+      if (e.type !== "print") return undefined;
+      if (e.receipt.id !== SJ_RECEIPT) return "Print St. Jude's gauze receipt (lot TR-LOT-0238).";
+      return null;
+    },
+    learn: [
+      "In real Luna this opens the Customer Return Receipt in a new window, ready to print.",
+      "Step 4 says: “Printing does not confirm a stock release, credit or refund.” A return receipt proves the goods came back. Credit notes and refund receipts are printed from their own history in step 3.",
+    ],
+  },
+  {
     kind: "choice",
     prompt: "A colleague wants to record St. Jude's refund now and send the bank transfer next week. What should you tell them?",
     options: [
       { text: "That's fine. Recording it first reminds us to pay", correct: false, why: "Not quite. Luna asks you to confirm the refund “has actually been paid”. Recording it early makes the bank account and the customer record wrong." },
-      { text: "Record it only after the money has actually left the bank, using the real transfer reference", correct: true, why: "Correct. Luna doesn't send money. It records a refund that has already happened." },
+      { text: "Record it only after the money has actually left the bank, using the real transfer reference", correct: true, why: "Correct. Luna's step 3 says: “recording a refund does not send money.” It records a refund that has already happened." },
       { text: "Record it as a credit instead", correct: false, why: "Not quite. St. Jude paid in full, so there's no balance to credit. The answer is to wait until the refund is actually paid." },
     ],
     learn: ["The same rule applies to customer payments and vendor payments: Luna records money that has actually moved."],
@@ -442,9 +469,9 @@ const missions: Mission[] = [
     kind: "choice",
     prompt: "Who can do what with customer returns in Luna?",
     options: [
-      { text: "Anyone who can see the invoice can approve returns and post credits", correct: false, why: "Not quite. Returns move stock and accounting, so Luna limits each step by role." },
-      { text: "A Director approves, receives, inspects, releases stock and posts credits. A Bookkeeper can prepare credit drafts and record refunds. A Salesman can't work on returns", correct: true, why: "Correct. database/luna-authorization-levels.sql gives return review, receiving, inspection and stock release “director” permission, and only a Director can post a credit note. Preparing credits and recording refunds use “bookkeeping” permission." },
-      { text: "A Salesman can approve returns for their own customers", correct: false, why: "Not quite. Salesmen have only “sales” permission, which doesn't include customer returns." },
+      { text: "Anyone who can see the invoice can authorize returns and post credits", correct: false, why: "Not quite. Returns move stock and accounting, so Luna limits each step by role." },
+      { text: "A Director authorizes, receives, inspects, releases stock and posts credits. A Bookkeeper can prepare credit drafts and record refunds. A Salesman can't work on returns", correct: true, why: "Correct. Return review, receiving, inspection and stock release need “director” permission, and only a Director can post a credit note. Preparing credits and recording refunds use “bookkeeping” permission. Luna's new guided steps didn't change any of these checks." },
+      { text: "A Salesman can authorize returns for their own customers", correct: false, why: "Not quite. Salesmen have only “sales” permission, which doesn't include customer returns." },
     ],
     learn: ["This split means the person who prepares a credit or a refund isn't always the person who approves it."],
   },
@@ -453,62 +480,65 @@ const missions: Mission[] = [
 // Where each hands-on task is done. Opening a different section during the task gets a hint.
 const missionArea: Record<number, string> = {
   1: "Customer Returns", 2: "Customer Returns", 4: "Customer Returns", 5: "Customer Returns", 6: "Customer Returns",
-  8: "Customer Returns", 9: "Customer Returns", 12: "Customer Returns", 13: "Customer Returns", 15: "Customer Returns", 16: "Customer Returns",
+  8: "Customer Returns", 9: "Customer Returns", 12: "Customer Returns", 13: "Customer Returns", 15: "Customer Returns", 16: "Customer Returns", 17: "Customer Returns",
 };
 
 // Step-by-step help shown after the second unsuccessful try on a task (by task number).
 const missionHelp: Record<number, string[]> = {
   0: ["Returns from customers are handled in Customer Returns.", "Click “Customer Returns” in the left sidebar."],
   1: [
-    "Under “New customer return”, choose Riverside Family Clinic in “Customer”.",
+    "At the top of Customer Returns, choose Riverside Family Clinic in “Customer”.",
     "In “Customer order”, choose “SO-00026 — Riverside Family Clinic — invoice date 2026-10-15”.",
-    "You can also click “View order” on the SO-00026 row in “Recent customer orders”.",
+    "You can also click “Open returns” on the SO-00026 row in “Find another customer order”.",
   ],
   2: [
-    "In the table, choose “ACS-SYR-5ML — Syringe 5 mL, luer lock” and type 3 in “Return quantity”.",
+    "In “1. Select the returned item”, choose “ACS-SYR-5ML — Syringe 5 mL, luer lock” and type 3 in “Return quantity”.",
     "In “Reported condition”, choose “Reported damaged”.",
-    "Type a reason of at least 10 characters, then click “Save Draft”.",
+    "Type a reason of at least 10 characters, then click “Save return & review”.",
   ],
   4: [
-    "Scroll to “Return request history” under SO-00026.",
-    "Click “Open review” on the RET-8a41f0c7 row (ACS-SYR-5ML, 3 Box, draft).",
-    "Tick the box that starts “I reviewed this item and quantity…”, then click “Approve return request”.",
+    "The saved return is open under “1. Review & authorize return”. If you closed it, click “Find a saved return”, then “Open review” on RET-8a41f0c7.",
+    "Tick the box that starts “I reviewed this item and quantity…”, then click “Authorize return & continue”.",
   ],
   5: [
-    "The form is under “Receive and inspect returned goods”, in the open RET-8a41f0c7 review.",
-    "Choose “TR-LOT-0231 — 3 still returnable” and type 3 in “Quantity physically received”.",
-    "Type receiving notes of at least 10 characters, tick the confirmation box, then click “Record physical receipt”.",
+    "Make sure “2. Receive & inspect” is the highlighted step button. The form is headed “Receive into quarantine”.",
+    "“TR-LOT-0231 — 3 still returnable” should already be chosen. Type 3 in “Quantity physically received”.",
+    "Type receiving notes of at least 10 characters, tick the confirmation box, then click “Save receipt & inspect”.",
   ],
   6: [
-    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0231”, click “Open inspection”. The inspection form opens just below.",
+    "The form is headed “Inspect 3 unit(s) from TR-LOT-0231”, just below the “Lot TR-LOT-0231” box. If it's closed, click “Inspect received goods” in that box.",
     "Choose “Damaged” for the condition and tick “Product, original lot and item identity verified”.",
-    "Choose “Ineligible for restock”, type findings of at least 10 characters, tick the last box, then click “Save inspection”.",
+    "Choose “Ineligible for restock”, type findings of at least 10 characters, tick the last box, then click “Save inspection & continue”.",
   ],
   8: [
-    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0231”, click “Return credit”. The “Customer credit notes” form opens just below.",
-    "Type 10950.00 in “Credit amount (GYD)” and a reason of at least 10 characters.",
-    "Click “Save credit draft for review”.",
+    "Make sure “3. Stock & customer balance” is the highlighted step button.",
+    "In the box headed “Lot TR-LOT-0231”, click “Review customer credit”. The “Customer credit notes” form opens just below.",
+    "Type 10950.00 in “Credit amount (GYD)” and a reason of at least 10 characters, then click “Save credit draft for review”.",
   ],
   9: [
     "The draft is under “Review unposted credit”. If it's closed, click “Review draft” in “Credit history”.",
     "Tick “I confirm this credit and authorize the accounting adjustment.”, then click “Post reviewed credit”.",
   ],
   12: [
-    "In “Customer order”, choose “SO-00027 — St. Jude Community Hospital”. You can also click “View order” on its row in “Recent customer orders”.",
-    "In “Return request history”, click “Open review” on RET-5c2e81d4.",
+    "At the top of Customer Returns, choose St. Jude Community Hospital in “Customer”, then “SO-00027 — St. Jude Community Hospital” in “Customer order”. Or click “Show all”, then “Open returns” on the SO-00027 row in “Find another customer order”.",
+    "Click “Find a saved return (1)” to open the list, then click “Open review” on RET-5c2e81d4.",
   ],
   13: [
-    "In the open RET-5c2e81d4 review, scroll down to the heading “Received items and stock release status” and find the box headed “Lot TR-LOT-0238”.",
+    "In the box headed “Lot TR-LOT-0238”, click “Continue to stock & settlement”. You can also click the step button “3. Stock & customer balance”.",
     "Click “Review stock release”, tick the box that starts “I reviewed the eligible inspection…”, then click “Release stock and record adjustment”.",
   ],
   15: [
-    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0238”, click “Cash refund”. The refund form opens just below.",
+    "Make sure “3. Stock & customer balance” is the highlighted step button. In the box headed “Lot TR-LOT-0238”, click “Record customer refund”. The refund form opens just below.",
     "Type 8100.00, choose “Republic Bank — Operating Account (GYD)” and “Bank transfer”, and type SJ-RFD-0107 as the reference.",
     "Type a reason of at least 10 characters, then click “Review refund”.",
   ],
   16: [
     "Under “Review actual customer refund”, tick “I confirm this refund has actually been paid to the customer.”",
     "Click “Record confirmed refund”. To fix something first, click “Change details”.",
+  ],
+  17: [
+    "The step buttons sit at the top of “Return progress”: “2. Receive & inspect”, “3. Stock & customer balance” and “4. Review & print”.",
+    "Click “4. Review & print”, then click “Print return receipt” in the box headed “Lot TR-LOT-0238”.",
   ],
 };
 
@@ -527,6 +557,8 @@ const lesson7Styles = `
 .lsim-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
 .lsim-rowbtns { display:flex; gap:6px; flex-wrap:wrap; }
 .lsim-history li { font-size:13px; margin:4px 0; }
+.lsim-steps { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+.lsim-saved summary, .lsim-sub details summary { cursor:pointer; color:#0b3d78; font-weight:600; }
 .lsim-receipt { border:2px solid #1f6fd1; border-radius:10px; padding:10px 12px; margin:8px 0; background:#f4f9ff; }
 .lsim-receipt-head { font-weight:700; font-size:15px; color:#0b3d78; margin-bottom:4px; }
 .lsim-receipt p { font-size:13px; margin:2px 0 6px; }
@@ -581,6 +613,7 @@ export default function DirectorLesson7Simulator() {
   const [inspNotes, setInspNotes] = useState("");
   const [inspConfirmed, setInspConfirmed] = useState(false);
   const [panel, setPanel] = useState<{ kind: "credit" | "refund" | "restock"; receiptId: string } | null>(null);
+  const [flow, setFlow] = useState<ReturnStep>("receive");
 
   // Credit (app/gyd-customer-credit.tsx)
   const [creditDate, setCreditDate] = useState(today());
@@ -690,7 +723,7 @@ export default function DirectorLesson7Simulator() {
 
   function resetReceiving() {
     setSourceLot(""); setRecQty("1"); setRecDate(today()); setRecNotes(""); setRecConfirmed(false); setRecNotice("");
-    setInspectId(null); setPanel(null);
+    setInspectId(null); setPanel(null); setFlow("receive");
     resetCredit(); resetRefund(); setRestockConfirmed(false); setRestockNotice("");
   }
 
@@ -811,7 +844,8 @@ export default function DirectorLesson7Simulator() {
     attempt({ type: "prepare", invoice: selected, sku: line.sku, quantity: qty, condition }, () => {
       setRequests((prev) => [request, ...prev]);
       setLineId(""); setQuantity("1"); setCondition("unknown"); setReason("");
-      setReviewNotice("Return draft saved. Open it below to review and approve.");
+      setOpenedId(id); setApproveConfirmed(false); resetReceiving();
+      setReviewNotice("Return draft saved. Review and authorize it below to continue.");
     });
   }
 
@@ -819,7 +853,15 @@ export default function DirectorLesson7Simulator() {
     setOpenedId(request.id);
     setApproveConfirmed(false);
     resetReceiving();
+    setReviewNotice("");
+    setSourceLot(onlyLot(request));
     attempt({ type: "open-review", request }, () => {});
+  }
+
+  // onlyReturnSource(): a sole eligible shipment lot is selected automatically.
+  function onlyLot(request: ReturnRequest, receivedNow = 0) {
+    const line = lineOf(request);
+    return lotStillReturnable(line) - receivedNow > 0 ? line.shipped_lot.lot : "";
   }
 
   function approveReturn() {
@@ -836,7 +878,9 @@ export default function DirectorLesson7Simulator() {
     attempt({ type: "approve", request }, () => {
       setRequests((prev) => prev.map((r) => (r.id === request.id ? { ...r, status: "approved", approved_at: today() } : r)));
       setApproveConfirmed(false);
-      setReviewNotice("Return authorized. No goods have been received, restocked or credited by this action.");
+      resetReceiving();
+      setSourceLot(onlyLot(request));
+      setReviewNotice("Return authorized. Continue with Receive & inspect below. Stock and the customer balance have not changed.");
     });
   }
 
@@ -868,15 +912,19 @@ export default function DirectorLesson7Simulator() {
     const id = request.id === RIVERSIDE_REQUEST && !receipts.some((rc) => rc.id === RIVERSIDE_RECEIPT) ? RIVERSIDE_RECEIPT : `rc-${nextId().slice(0, 4)}`;
     attempt({ type: "receive", request, lot: sourceLot, quantity: qty }, () => {
       setReceipts((prev) => [...prev, { id, request_id: request.id, lot: sourceLot, date: recDate, quantity: qty, notes: recNotes.trim(), inspections: [] }]);
-      setSourceLot(""); setRecQty("1"); setRecNotes(""); setRecConfirmed(false);
+      setSourceLot(onlyLot(request, qty)); setRecQty("1"); setRecNotes(""); setRecConfirmed(false);
       setRecNotice("Physical receipt saved in quarantine. Saleable stock, inventory value and the customer balance have not changed.");
+      setPanel(null); setFlow("receive"); setInspectId(id);
+      setInspDate(today()); setInspCondition("unknown"); setDecision("hold"); setIdentity(false); setStorage(false); setInspNotes(""); setInspConfirmed(false);
     });
   }
 
   function openInspection(rc: Receipt) {
+    const latest = rc.inspections[rc.inspections.length - 1];
+    setFlow("receive");
     setPanel(null);
     setInspectId(rc.id);
-    setInspDate(today()); setInspCondition("unknown"); setDecision("hold"); setIdentity(false); setStorage(false); setInspNotes(""); setInspConfirmed(false);
+    setInspDate(today()); setInspCondition(latest?.condition ?? "unknown"); setDecision(latest?.decision ?? "hold"); setIdentity(false); setStorage(false); setInspNotes(""); setInspConfirmed(false);
   }
 
   function saveInspection(event: FormEvent<HTMLFormElement>) {
@@ -893,8 +941,18 @@ export default function DirectorLesson7Simulator() {
     attempt({ type: "inspect", receipt: rc, condition: inspCondition, decision, identity, storage }, () => {
       setReceipts((prev) => prev.map((r) => (r.id === rc.id ? { ...r, inspections: [...r.inspections, inspection] } : r)));
       setInspectId(null);
+      if (decision !== "hold" && inspCondition !== "unknown") setFlow("resolve");
       setRecNotice("Inspection saved. The goods remain quarantined, including items marked eligible for restock. No stock release, credit, refund or disposal was performed.");
     });
+  }
+
+  function goFlow(next: ReturnStep) {
+    setFlow(next); setInspectId(null); setPanel(null);
+    resetCredit(); resetRefund(); setRestockConfirmed(false); setRestockNotice("");
+  }
+
+  function printReceipt(rc: Receipt) {
+    attempt({ type: "print", receipt: rc }, () => setRecNotice("In real Luna this opens the Customer Return Receipt in a new window, ready to print."));
   }
 
   function openPanel(kind: "credit" | "refund" | "restock", rc: Receipt) {
@@ -1029,8 +1087,8 @@ export default function DirectorLesson7Simulator() {
     return (
       <>
         <section className="lsim-module">
-          <h2>New customer return</h2>
-          <p>Choose the customer and original SO order, then enter the returned product and quantity.</p>
+          <h2>Customer returns</h2>
+          <p>Choose the customer and original SO order. Start a return or continue a saved request below.</p>
           <form className="lsim-form" onSubmit={runSearch} noValidate>
             <div className="lsim-fields">
               <label>Customer
@@ -1039,7 +1097,7 @@ export default function DirectorLesson7Simulator() {
                   {customers.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </label>
-              <label>Search invoice / SO number
+              <label>Search SO number
                 <input maxLength={30} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="SO-00001 or 1" />
               </label>
             </div>
@@ -1060,11 +1118,11 @@ export default function DirectorLesson7Simulator() {
               <p style={{ fontSize: 14, marginTop: 10 }}><strong>{soNumber(selected.so)} — {selected.customer}</strong></p>
               {renderReview(selected)}
             </>
-          ) : <p style={{ fontSize: 13 }}>Select an order above or use View order below to open its return-entry table.</p>}
+          ) : <p style={{ fontSize: 13 }}>Select an order above or use Open returns below to open its return-entry table.</p>}
         </section>
 
         <section className="lsim-module">
-          <h2>Recent customer orders</h2>
+          <h2>Find another customer order</h2>
           <p>Orders with recorded billing documents eligible for return review. Separate billed deliveries on the same SO are listed individually.</p>
           <p style={{ fontSize: 13 }}>{rows.length === 0 ? "No matching orders with recorded billing documents." : `Showing 1–${rows.length} of ${rows.length} billed deliveries.`}</p>
           <div className="lsim-table-wrap">
@@ -1074,7 +1132,7 @@ export default function DirectorLesson7Simulator() {
                 {rows.map((i) => (
                   <tr key={i.id}>
                     <td>{soNumber(i.so)}</td><td>{i.customer}</td><td>{i.date}</td><td>{i.status.replaceAll("_", " ")}</td>
-                    <td><button type="button" className="lsim-sbtn" onClick={() => { selectInvoice(i); toTop(); }}>View order</button></td>
+                    <td><button type="button" className="lsim-sbtn" onClick={() => { selectInvoice(i); toTop(); }}>Open returns</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -1088,62 +1146,68 @@ export default function DirectorLesson7Simulator() {
   function renderReview(invoice: ReturnInvoice) {
     const item = invoice.lines.find((l) => l.id === lineId);
     const history = requests.filter((r) => r.invoice_id === invoice.id);
+    const openHere = opened && opened.invoice_id === invoice.id ? opened : null;
     return (
       <div className="lsim-sub">
-        <p>Enter the product and quantity from the selected customer order. Physical receiving, condition inspection, restocking and any customer credit are separate steps.</p>
+        <p>Follow this return from the original sale through physical inspection and customer settlement. Each saved action keeps its own audit record.</p>
+        <p><strong>1. Select item &amp; authorize</strong> → 2. Receive &amp; inspect → 3. Stock &amp; customer balance → 4. Review &amp; print</p>
         {reviewNotice && <p className={`lsim-status ${isError(reviewNotice) ? "error" : ""}`} role="status">{reviewNotice}</p>}
-        <form className="lsim-form" onSubmit={prepareReturn} noValidate style={{ marginTop: 8 }}>
-          <h4 style={{ fontSize: 14, margin: "0 0 6px" }}>Prepare a return item</h4>
-          <div className="lsim-table-wrap">
-            <table className="lsim-table">
-              <thead><tr><th style={{ width: "40%" }}>Product</th><th>Unit</th><th>Invoiced</th><th>Available to return</th><th>Return quantity</th></tr></thead>
-              <tbody><tr>
-                <td>
-                  <select aria-label="Invoice item" style={{ minWidth: 220 }} value={lineId} onChange={(e) => setLineId(e.target.value)}>
-                    <option value="">Choose an invoiced item</option>
-                    {invoice.lines.map((l) => <option key={l.id} value={l.id} disabled={availableToReturn(l) === 0}>{l.sku} — {l.name}</option>)}
-                  </select>
-                </td>
-                <td>{item?.unit ?? "—"}</td><td>{item?.quantity ?? "—"}</td><td>{item ? availableToReturn(item) : "—"}</td>
-                <td><input aria-label="Return quantity in invoice units" type="number" min="1" step="1" style={{ width: 80 }} value={quantity} onChange={(e) => setQuantity(e.target.value)} /></td>
-              </tr></tbody>
-            </table>
-          </div>
-          <div className="lsim-fields" style={{ marginTop: 8 }}>
-            <label>Request date<input type="date" min={invoice.date} max={today()} value={reqDate} onChange={(e) => setReqDate(e.target.value)} /></label>
-            <label>Reported condition
-              <select value={condition} onChange={(e) => setCondition(e.target.value as Condition)}>
-                <option value="unknown">Not inspected</option>
-                <option value="unopened">Reported unopened</option>
-                <option value="opened">Reported opened</option>
-                <option value="damaged">Reported damaged</option>
-              </select>
-            </label>
-          </div>
-          <label style={{ display: "block", marginTop: 8 }}>Reason<textarea maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-          <button className="lsim-pbtn" style={{ marginTop: 8 }}>Save Draft</button>
-        </form>
-
-        <h4 style={{ fontSize: 14, margin: "12px 0 4px" }}>Return request history</h4>
-        <p style={{ fontSize: 13 }}>{history.length === 0 ? "No return requests for this invoice." : `Showing 1–${history.length} of ${history.length} requests.`}</p>
-        {history.length > 0 && (
-          <div className="lsim-table-wrap">
-            <table className="lsim-table">
-              <thead><tr><th>Reference</th><th>Item</th><th>Quantity</th><th>Request date</th><th>Status</th><th>Review</th></tr></thead>
-              <tbody>{history.map((r) => {
-                const l = lineOf(r);
-                return (
-                  <tr key={r.id}>
-                    <td>RET-{r.id}</td><td>{l.sku} — {l.name}</td><td>{r.quantity} {l.unit}</td><td>{r.date}</td>
-                    <td>{r.status === "approved" ? "Authorized — open receiving status" : r.status}</td>
-                    <td><button type="button" className="lsim-sbtn" onClick={() => openReview(r)}>Open review</button></td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
-          </div>
+        {!openHere && (
+          <form className="lsim-form" onSubmit={prepareReturn} noValidate style={{ marginTop: 8 }}>
+            <h4 style={{ fontSize: 14, margin: "0 0 6px" }}>1. Select the returned item</h4>
+            <div className="lsim-table-wrap">
+              <table className="lsim-table">
+                <thead><tr><th style={{ width: "40%" }}>Product</th><th>Unit</th><th>Invoiced</th><th>Available to return</th><th>Return quantity</th></tr></thead>
+                <tbody><tr>
+                  <td>
+                    <select aria-label="Invoice item" style={{ minWidth: 220 }} value={lineId} onChange={(e) => setLineId(e.target.value)}>
+                      <option value="">Choose an invoiced item</option>
+                      {invoice.lines.map((l) => <option key={l.id} value={l.id} disabled={availableToReturn(l) === 0}>{l.sku} — {l.name}</option>)}
+                    </select>
+                  </td>
+                  <td>{item?.unit ?? "—"}</td><td>{item?.quantity ?? "—"}</td><td>{item ? availableToReturn(item) : "—"}</td>
+                  <td><input aria-label="Return quantity in invoice units" type="number" min="1" step="1" style={{ width: 80 }} value={quantity} onChange={(e) => setQuantity(e.target.value)} /></td>
+                </tr></tbody>
+              </table>
+            </div>
+            <div className="lsim-fields" style={{ marginTop: 8 }}>
+              <label>Request date<input type="date" min={invoice.date} max={today()} value={reqDate} onChange={(e) => setReqDate(e.target.value)} /></label>
+              <label>Reported condition
+                <select value={condition} onChange={(e) => setCondition(e.target.value as Condition)}>
+                  <option value="unknown">Not inspected</option>
+                  <option value="unopened">Reported unopened</option>
+                  <option value="opened">Reported opened</option>
+                  <option value="damaged">Reported damaged</option>
+                </select>
+              </label>
+            </div>
+            <label style={{ display: "block", marginTop: 8 }}>Reason<textarea maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+            <button className="lsim-pbtn" style={{ marginTop: 8 }}>Save return &amp; review</button>
+          </form>
         )}
-        {opened && opened.invoice_id === invoice.id && renderOpened(opened, invoice)}
+
+        <details className="lsim-saved" style={{ marginTop: 12 }}>
+          <summary>Find a saved return ({history.length})</summary>
+          <p style={{ fontSize: 13 }}>{history.length === 0 ? "No return requests for this invoice." : `Showing 1–${history.length} of ${history.length} requests.`}</p>
+          {history.length > 0 && (
+            <div className="lsim-table-wrap">
+              <table className="lsim-table">
+                <thead><tr><th>Reference</th><th>Item</th><th>Quantity</th><th>Request date</th><th>Status</th><th>Review</th></tr></thead>
+                <tbody>{history.map((r) => {
+                  const l = lineOf(r);
+                  return (
+                    <tr key={r.id}>
+                      <td>RET-{r.id}</td><td>{l.sku} — {l.name}</td><td>{r.quantity} {l.unit}</td><td>{r.date}</td>
+                      <td>{r.status === "approved" ? "Authorized — open receiving status" : r.status}</td>
+                      <td><button type="button" className="lsim-sbtn" onClick={() => openReview(r)}>Open review</button></td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
+          )}
+        </details>
+        {openHere && renderOpened(openHere, invoice)}
       </div>
     );
   }
@@ -1152,7 +1216,8 @@ export default function DirectorLesson7Simulator() {
     const l = lineOf(r);
     return (
       <div className="lsim-sub" aria-label={`Saved return review RET-${r.id}`}>
-        <h4>Saved return review — RET-{r.id}</h4>
+        <h4>{r.status === "draft" ? "1. Review & authorize return" : "Return progress"}</h4>
+        <details><summary style={{ fontSize: 13 }}>Full return reference</summary><p>RET-{r.id}</p></details>
         <p>Order: {soNumber(invoice.so)}. Customer: {invoice.customer}.</p>
         <p>Item: {l.sku} — {l.name}.</p>
         <p>Quantity: {r.quantity} {l.unit}. Request date: {r.date}.</p>
@@ -1163,13 +1228,13 @@ export default function DirectorLesson7Simulator() {
           <>
             <label className="lsim-check"><input type="checkbox" checked={approveConfirmed} onChange={(e) => setApproveConfirmed(e.target.checked)} /> I reviewed this item and quantity and authorize the customer return. This approval does not record receipt, restock inventory, issue a credit or send money.</label>
             <div className="lsim-actions">
-              <button type="button" className="lsim-pbtn" disabled={!approveConfirmed} onClick={approveReturn}>Approve return request</button>
+              <button type="button" className="lsim-pbtn" disabled={!approveConfirmed} onClick={approveReturn}>Authorize return &amp; continue</button>
               <button type="button" className="lsim-sbtn" onClick={cancelReturn}>Cancel draft</button>
             </div>
           </>
         )}
         {r.status === "approved" && renderReceiving(r, l)}
-        <div className="lsim-actions"><button type="button" className="lsim-sbtn" onClick={() => { setOpenedId(null); resetReceiving(); }}>Close return review</button></div>
+        <div className="lsim-actions"><button type="button" className="lsim-sbtn" onClick={() => { setOpenedId(null); resetReceiving(); }}>Back to item selection / saved returns</button></div>
       </div>
     );
   }
@@ -1178,15 +1243,21 @@ export default function DirectorLesson7Simulator() {
     const list = receipts.filter((rc) => rc.request_id === r.id);
     const received = list.reduce((s, rc) => s + rc.quantity, 0);
     const remaining = r.quantity - received;
-    const inspecting = list.find((rc) => rc.id === inspectId) ?? null;
+    const inspecting = flow === "receive" ? list.find((rc) => rc.id === inspectId) ?? null : null;
     const panelReceipt = panel ? list.find((rc) => rc.id === panel.receiptId) ?? null : null;
+    const steps: [ReturnStep, string][] = [["receive", "2. Receive & inspect"], ["resolve", "3. Stock & customer balance"], ["print", "4. Review & print"]];
     return (
       <div className="lsim-sub">
-        <h4>Receive and inspect returned goods</h4>
-        <p>Record physical custody against the original shipment lot. Keep returned goods quarantined until their stock release review is approved.</p>
+        <nav aria-label="Return workflow steps" className="lsim-steps">
+          {steps.map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={flow === value} className={flow === value ? "lsim-pbtn" : "lsim-sbtn"} onClick={() => goFlow(value)}>{label}</button>
+          ))}
+        </nav>
+        <h4>{flow === "receive" ? "Receive & inspect returned goods" : flow === "resolve" ? "Resolve stock and customer balance" : "Review & print return receipts"}</h4>
+        <p>{flow === "receive" ? "Record custody, then inspect the received goods. They remain in quarantine until an approved stock release." : flow === "resolve" ? "Stock release and customer settlement are separate decisions. Posting a credit does not restock goods; recording a refund does not send money." : "Print the physical return receipt. Printing does not confirm a stock release, credit or refund."}</p>
         {recNotice && <p className={`lsim-status ${isError(recNotice) ? "error" : ""}`} role="status">{recNotice}</p>}
         <p>Authorized: {r.quantity}. Physically received: {received}. Still expected: {remaining}. Quantities use the original invoice units.</p>
-        {remaining > 0 && (
+        {flow === "receive" && remaining > 0 && (
           <form className="lsim-form" onSubmit={recordReceipt} noValidate>
             <h4 style={{ fontSize: 14, margin: "6px 0" }}>Receive into quarantine</h4>
             <div className="lsim-fields">
@@ -1202,11 +1273,11 @@ export default function DirectorLesson7Simulator() {
             {sourceLot && <p>Supplier lot: {line.shipped_lot.supplier_lot}. Expiration: {line.shipped_lot.expiration}. Product category: {line.shipped_lot.category}.</p>}
             <label style={{ display: "block", marginTop: 8 }}>Receiving notes<textarea maxLength={1000} value={recNotes} onChange={(e) => setRecNotes(e.target.value)} /></label>
             <label className="lsim-check"><input type="checkbox" checked={recConfirmed} onChange={(e) => setRecConfirmed(e.target.checked)} /> I counted these goods, verified the original shipment lot, and placed them in quarantine.</label>
-            <button className="lsim-pbtn" disabled={!recConfirmed}>Record physical receipt</button>
+            <button className="lsim-pbtn" disabled={!recConfirmed}>Save receipt &amp; inspect</button>
           </form>
         )}
 
-        <h4 style={{ fontSize: 14, margin: "12px 0 4px" }}>Received items and stock release status</h4>
+        <h4 style={{ fontSize: 14, margin: "12px 0 4px" }}>Received items — choose the next action</h4>
         <div>
           {list.map((rc) => {
             const latest = rc.inspections[rc.inspections.length - 1];
@@ -1214,25 +1285,47 @@ export default function DirectorLesson7Simulator() {
               <div key={rc.id} className="lsim-receipt" role="group" aria-label={"Lot " + rc.lot}>
                 <div className="lsim-receipt-head">Lot {rc.lot}</div>
                 <p>Receipt date: {rc.date} · Quantity: {rc.quantity}</p>
-                <p>Latest inspection: {rc.restock ? "Restocked on " + rc.restock.date : latest ? disposition(latest.decision) : "Awaiting inspection — quarantined"}</p>
+                <p>Stock status: {rc.restock ? "Restocked on " + rc.restock.date : latest ? disposition(latest.decision) : "Awaiting inspection — quarantined"}</p>
                 <div className="lsim-rowbtns">
-                  <button type="button" className="lsim-sbtn" onClick={() => setRecNotice("In real Luna this opens the Customer Return Receipt in a new window, ready to print.")}>Print Return Receipt</button>
-                  <button type="button" className="lsim-sbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Open inspection</button>
-                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("restock", rc)}>{rc.restock ? "View saved release" : "Review stock release"}</button>
-                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("credit", rc)}>Return credit</button>
-                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("refund", rc)}>Cash refund</button>
+                  {flow === "receive" && (
+                    returnNeedsInspection(rc)
+                      ? <button type="button" className="lsim-pbtn" onClick={() => openInspection(rc)}>Inspect received goods</button>
+                      : <button type="button" className="lsim-pbtn" onClick={() => goFlow("resolve")}>Continue to stock &amp; settlement</button>
+                  )}
+                  {flow === "print" && <button type="button" className="lsim-pbtn" onClick={() => printReceipt(rc)}>Print return receipt</button>}
+                  {flow === "resolve" && (
+                    <>
+                      {!canReviewReturnSettlement(rc)
+                        ? <button type="button" className="lsim-pbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Complete inspection first</button>
+                        : <>
+                          <button type="button" className="lsim-pbtn" onClick={() => openPanel("credit", rc)}>Review customer credit</button>
+                          <button type="button" className="lsim-sbtn" onClick={() => openPanel("refund", rc)}>Record customer refund</button>
+                        </>}
+                      {(rc.restock || latest?.decision === "eligible_for_restock") && <button type="button" className="lsim-sbtn" onClick={() => openPanel("restock", rc)}>{rc.restock ? "View saved stock release" : "Review stock release"}</button>}
+                    </>
+                  )}
                 </div>
+                {flow === "resolve" && !rc.restock && latest?.decision === "ineligible" && <p style={{ marginTop: 6 }}>Not eligible for resale. Financial settlement can be reviewed separately.</p>}
+                {flow === "resolve" && (
+                  <details style={{ marginTop: 6 }}><summary style={{ fontSize: 13 }}>More actions</summary>
+                    <div className="lsim-rowbtns" style={{ marginTop: 6 }}>
+                      <button type="button" className="lsim-sbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Review / repeat inspection</button>
+                      <button type="button" className="lsim-sbtn" onClick={() => goFlow("print")}>Review &amp; print</button>
+                    </div>
+                  </details>
+                )}
               </div>
             );
           })}
-          {list.length === 0 && <p style={{ fontSize: 13 }}>No goods received yet.</p>}
+          {list.length === 0 && <p style={{ fontSize: 13 }}>No goods have been received for this return. Record physical receipt in step 2 before inspection or settlement.</p>}
         </div>
+        {flow === "print" && <p style={{ fontSize: 13 }}>For credit-note and refund documents, open the corresponding history in step 3. A physical receipt alone does not mean this return is financially settled.</p>}
         <p style={{ fontSize: 13 }}>{list.length} receipt(s). Showing up to 25 per page.</p>
 
         {inspecting && renderInspection(inspecting)}
-        {panel && panelReceipt && panel.kind === "credit" && renderCredit(panelReceipt)}
-        {panel && panelReceipt && panel.kind === "refund" && renderRefund(panelReceipt)}
-        {panel && panelReceipt && panel.kind === "restock" && renderRestock(panelReceipt)}
+        {flow === "resolve" && panel && panelReceipt && panel.kind === "credit" && renderCredit(panelReceipt)}
+        {flow === "resolve" && panel && panelReceipt && panel.kind === "refund" && renderRefund(panelReceipt)}
+        {flow === "resolve" && panel && panelReceipt && panel.kind === "restock" && renderRestock(panelReceipt)}
       </div>
     );
   }
@@ -1269,7 +1362,7 @@ export default function DirectorLesson7Simulator() {
         <label style={{ display: "block" }}>Inspection findings<textarea maxLength={1000} value={inspNotes} onChange={(e) => setInspNotes(e.target.value)} /></label>
         <label className="lsim-check"><input type="checkbox" checked={inspConfirmed} onChange={(e) => setInspConfirmed(e.target.checked)} /> I inspected this batch and confirm the findings and decision. The goods remain quarantined.</label>
         <div className="lsim-actions">
-          <button className="lsim-pbtn" disabled={!inspConfirmed}>Save inspection</button>
+          <button className="lsim-pbtn" disabled={!inspConfirmed}>Save inspection &amp; continue</button>
           <button type="button" className="lsim-sbtn" onClick={() => setInspectId(null)}>Close inspection</button>
         </div>
       </form>
@@ -1466,7 +1559,7 @@ export default function DirectorLesson7Simulator() {
         {finished ? (
           <div className="lsim-feedback good" style={{ gridColumn: "1 / -1" }}>
             <p><strong>Lesson 7 complete.</strong></p>
-            <p>You can now take a customer return from request to approval, receive it into quarantine against the original lot, and inspect it. You can settle it with a credit when the customer still owes money, or with a refund when they&apos;ve already paid. You can also release eligible goods back to stock at their original cost.</p>
+            <p>You can now follow Luna&apos;s 4 guided return steps: take a customer return from request to authorization, receive it into quarantine against the original lot, and inspect it. You can settle it with a credit when the customer still owes money, or with a refund when they&apos;ve already paid. You can also release eligible goods back to stock at their original cost.</p>
             <p>Next: Lesson 8 covers supplier returns and settlement.</p>
             <p role="status">
               {saveStatus === "saving" && "Saving your completion…"}

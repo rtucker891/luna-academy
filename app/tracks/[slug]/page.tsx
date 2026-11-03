@@ -8,6 +8,7 @@ import DirectorLesson3Simulator from "../../director-lesson3-simulator";
 import DirectorLesson4Simulator from "../../director-lesson4-simulator";
 import DirectorLesson5Simulator from "../../director-lesson5-simulator";
 import DirectorLesson6Simulator from "../../director-lesson6-simulator";
+import DirectorLesson7Simulator from "../../director-lesson7-simulator";
 import { directorLearningMaterial } from "../../director-learning-material";
 const learningTracks = [
   {
@@ -303,6 +304,10 @@ export default async function TrackPage({
               {slug === "director" &&
   lesson.title === "Customer orders, invoices, payments, and shipments" && (
     <DirectorLesson6Simulator />
+  )}
+              {slug === "director" &&
+  lesson.title === "Customer returns, credits, and refunds" && (
+    <DirectorLesson7Simulator />
   )}
                 <h3>Learning objective</h3>
                 <p>{lesson.objective}</p>

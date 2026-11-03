@@ -270,7 +270,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "In “Received items and stock release status”, click “Open inspection” on the TR-LOT-0231 row. Record what you found and click “Save inspection”.",
+    prompt: "In the workspace below, scroll down inside the open RET-8a41f0c7 review, past “Receive and inspect returned goods”, to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0231” and click its “Open inspection” button. Record what you found and click “Save inspection”.",
     details: [
       "Observed condition: Damaged",
       "Tick “Product, original lot and item identity verified”",
@@ -302,7 +302,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "On the TR-LOT-0231 row, click “Return credit”. Save a credit draft for the full value of the 3 boxes.",
+    prompt: "In the workspace below, scroll down inside the open RET-8a41f0c7 review, past “Receive and inspect returned goods”, to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0231” and click its “Return credit” button. Save a credit draft for the full value of the 3 boxes.",
     details: [
       "Credit date: today (already filled in)",
       "Credit amount (GYD): 10950.00 (or 10,950.00), which is 3 boxes × GYD 3650.00",
@@ -369,7 +369,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "On the TR-LOT-0238 row, click “Review stock release”. Read the review, tick the approval box and click “Release stock and record adjustment”.",
+    prompt: "In the workspace below, scroll down inside the open RET-5c2e81d4 review to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0238” and click its “Review stock release” button. Read the review, tick the approval box and click “Release stock and record adjustment”.",
     check: (e) => {
       if (e.type !== "restock") return undefined;
       if (e.receipt.id !== SJ_RECEIPT) return "Release St. Jude's unopened gauze (lot TR-LOT-0238).";
@@ -392,7 +392,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "St. Jude paid INV-00031 in full, so they get their money back. Your bank sent the transfer this morning. On the TR-LOT-0238 row, click “Cash refund”, fill in the form and click “Review refund”.",
+    prompt: "St. Jude paid INV-00031 in full, so they get their money back. Your bank sent the transfer this morning. in the workspace below, scroll down inside the open RET-5c2e81d4 review to the heading “Received items and stock release status”. Find the box headed “Lot TR-LOT-0238” and click its “Cash refund” button. Fill in the form and click “Review refund”.",
     details: [
       "Amount refunded (GYD): 8100.00 (or 8,100.00), which is 6 boxes × GYD 1350.00",
       "GYD bank account: Republic Bank — Operating Account (GYD)",
@@ -480,12 +480,12 @@ const missionHelp: Record<number, string[]> = {
     "Type receiving notes of at least 10 characters, tick the confirmation box, then click “Record physical receipt”.",
   ],
   6: [
-    "In “Received items and stock release status”, click “Open inspection” on the TR-LOT-0231 row.",
+    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0231”, click “Open inspection”. The inspection form opens just below.",
     "Choose “Damaged” for the condition and tick “Product, original lot and item identity verified”.",
     "Choose “Ineligible for restock”, type findings of at least 10 characters, tick the last box, then click “Save inspection”.",
   ],
   8: [
-    "Click “Return credit” on the TR-LOT-0231 row. The credit form opens below the table.",
+    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0231”, click “Return credit”. The “Customer credit notes” form opens just below.",
     "Type 10950.00 in “Credit amount (GYD)” and a reason of at least 10 characters.",
     "Click “Save credit draft for review”.",
   ],
@@ -498,11 +498,11 @@ const missionHelp: Record<number, string[]> = {
     "In “Return request history”, click “Open review” on RET-5c2e81d4.",
   ],
   13: [
-    "In the open RET-5c2e81d4 review, find the TR-LOT-0238 row in “Received items and stock release status”.",
+    "In the open RET-5c2e81d4 review, scroll down to the heading “Received items and stock release status” and find the box headed “Lot TR-LOT-0238”.",
     "Click “Review stock release”, tick the box that starts “I reviewed the eligible inspection…”, then click “Release stock and record adjustment”.",
   ],
   15: [
-    "Click “Cash refund” on the TR-LOT-0238 row in the RET-5c2e81d4 review.",
+    "Scroll down to the heading “Received items and stock release status”. In the box headed “Lot TR-LOT-0238”, click “Cash refund”. The refund form opens just below.",
     "Type 8100.00, choose “Republic Bank — Operating Account (GYD)” and “Bank transfer”, and type SJ-RFD-0107 as the reference.",
     "Type a reason of at least 10 characters, then click “Review refund”.",
   ],
@@ -527,6 +527,9 @@ const lesson7Styles = `
 .lsim-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
 .lsim-rowbtns { display:flex; gap:6px; flex-wrap:wrap; }
 .lsim-history li { font-size:13px; margin:4px 0; }
+.lsim-receipt { border:2px solid #1f6fd1; border-radius:10px; padding:10px 12px; margin:8px 0; background:#f4f9ff; }
+.lsim-receipt-head { font-weight:700; font-size:15px; color:#0b3d78; margin-bottom:4px; }
+.lsim-receipt p { font-size:13px; margin:2px 0 6px; }
 `;
 
 export default function DirectorLesson7Simulator() {
@@ -1204,28 +1207,24 @@ export default function DirectorLesson7Simulator() {
         )}
 
         <h4 style={{ fontSize: 14, margin: "12px 0 4px" }}>Received items and stock release status</h4>
-        <div className="lsim-table-wrap">
-          <table className="lsim-table">
-            <thead><tr><th>Lot</th><th>Receipt date</th><th>Quantity</th><th>Latest inspection</th><th>Action</th></tr></thead>
-            <tbody>{list.map((rc) => {
-              const latest = rc.inspections[rc.inspections.length - 1];
-              return (
-                <tr key={rc.id}>
-                  <td>{rc.lot}</td><td>{rc.date}</td><td>{rc.quantity}</td>
-                  <td>{rc.restock ? "Restocked on " + rc.restock.date : latest ? disposition(latest.decision) : "Awaiting inspection — quarantined"}</td>
-                  <td>
-                    <div className="lsim-rowbtns">
-                      <button type="button" className="lsim-sbtn" onClick={() => setRecNotice("In real Luna this opens the Customer Return Receipt in a new window, ready to print.")}>Print Return Receipt</button>
-                      <button type="button" className="lsim-sbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Open inspection</button>
-                      <button type="button" className="lsim-sbtn" onClick={() => openPanel("restock", rc)}>{rc.restock ? "View saved release" : "Review stock release"}</button>
-                      <button type="button" className="lsim-sbtn" onClick={() => openPanel("credit", rc)}>Return credit</button>
-                      <button type="button" className="lsim-sbtn" onClick={() => openPanel("refund", rc)}>Cash refund</button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}</tbody>
-          </table>
+        <div>
+          {list.map((rc) => {
+            const latest = rc.inspections[rc.inspections.length - 1];
+            return (
+              <div key={rc.id} className="lsim-receipt" role="group" aria-label={"Lot " + rc.lot}>
+                <div className="lsim-receipt-head">Lot {rc.lot}</div>
+                <p>Receipt date: {rc.date} · Quantity: {rc.quantity}</p>
+                <p>Latest inspection: {rc.restock ? "Restocked on " + rc.restock.date : latest ? disposition(latest.decision) : "Awaiting inspection — quarantined"}</p>
+                <div className="lsim-rowbtns">
+                  <button type="button" className="lsim-sbtn" onClick={() => setRecNotice("In real Luna this opens the Customer Return Receipt in a new window, ready to print.")}>Print Return Receipt</button>
+                  <button type="button" className="lsim-sbtn" disabled={Boolean(rc.restock)} onClick={() => openInspection(rc)}>Open inspection</button>
+                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("restock", rc)}>{rc.restock ? "View saved release" : "Review stock release"}</button>
+                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("credit", rc)}>Return credit</button>
+                  <button type="button" className="lsim-sbtn" onClick={() => openPanel("refund", rc)}>Cash refund</button>
+                </div>
+              </div>
+            );
+          })}
           {list.length === 0 && <p style={{ fontSize: 13 }}>No goods received yet.</p>}
         </div>
         <p style={{ fontSize: 13 }}>{list.length} receipt(s). Showing up to 25 per page.</p>

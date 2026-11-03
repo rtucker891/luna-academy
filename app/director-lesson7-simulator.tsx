@@ -590,6 +590,9 @@ const missionHelp: Record<number, string[]> = {
 type Feedback = { tone: "good" | "bad"; lines: string[]; help?: string[] } | null;
 
 const lesson7Styles = `
+.lsim[aria-label$="Lesson 7"] .lsim-table th, .lsim[aria-label$="Lesson 7"] .lsim-table td { white-space:normal; padding-left:6px; padding-right:6px; }
+.lsim[aria-label$="Lesson 7"] .lsim-table td button { white-space:nowrap; }
+.lsim[aria-label$="Lesson 7"] .lsim-table select { min-width:0 !important; }
 .lsim-form select, .lsim-form input, .lsim-form textarea { width:100%; min-width:0; max-width:100%; box-sizing:border-box; }
 .lsim-form textarea { min-height:60px; font:inherit; padding:8px; border:1px solid #c9d8ea; border-radius:8px; }
 .lsim-fields > * { min-width:0; }
@@ -1212,7 +1215,7 @@ export default function DirectorLesson7Simulator() {
                 <thead><tr><th style={{ width: "40%" }}>Product</th><th>Unit</th><th>Invoiced</th><th>Available to return</th><th>Return quantity</th></tr></thead>
                 <tbody><tr>
                   <td>
-                    <select aria-label="Invoice item" style={{ minWidth: 220 }} value={lineId} onChange={(e) => setLineId(e.target.value)}>
+                    <select aria-label="Invoice item" value={lineId} onChange={(e) => setLineId(e.target.value)}>
                       <option value="">Choose an invoiced item</option>
                       {invoice.lines.map((l) => <option key={l.id} value={l.id} disabled={availableToReturn(l) === 0}>{l.sku} — {l.name}</option>)}
                     </select>

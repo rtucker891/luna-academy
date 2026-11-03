@@ -24,7 +24,9 @@ import { formStyles } from "./director-lesson2-simulator";
   the Luna_Accounting source (app/customer-orders.tsx, app/invoices-bills.tsx,
   accounting/order-shipment.ts, database/customer-invoice-before-shipment.sql,
   database/gyd-customer-payment-draft.sql, database/luna-authorization-levels.sql,
-  docs/customer-invoice-before-shipment.md, docs/native-gyd-customer-sales.md).
+  docs/customer-invoice-before-shipment.md, docs/native-gyd-customer-sales.md;
+  full payment before shipment as of Luna 21879b1,
+  supabase/migrations/20261103042803_paid_customer_return_refunds.sql).
   Records, bank accounts and references are fictional and live only in this
   browser tab.
 */
@@ -147,7 +149,7 @@ const missions: Mission[] = [
     check: (e) => (e.type !== "navigate" ? undefined : e.section === "Customer Orders" ? null : `You opened ${e.section}. Orders that customers place with you are entered in Customer Orders.`),
     learn: [
       "Customer Orders is where you record what a customer wants to buy. Purchase Orders, from Lessons 3–5, are the opposite direction: what you buy from vendors.",
-      "Luna's order of work for a sale is: order, invoice, record the invoice, payment, then shipment.",
+      "Luna's order of work for a sale is: order, invoice, record the invoice, full payment, then shipment.",
     ],
   },
   {
@@ -199,8 +201,8 @@ const missions: Mission[] = [
     prompt: "In “Recent customer orders”, click “View order” for SO-00029 and read the message under “Record items shipped”.",
     check: (e) => (e.type !== "order-view" ? undefined : e.order.number === 29 ? null : `${soNumber(e.order.number)} is ${e.order.customer}'s order. Harbour View's order is SO-00029.`),
     learn: [
-      "Luna says: “Create and record the customer invoice, then record a payment in Invoices & Bills before shipping.” The shipment boxes stay greyed out.",
-      "The database enforces this too, so no screen can skip it. A draft invoice, another order's invoice or a credit doesn't unlock shipping.",
+      "Luna says: “Create and record the customer invoice, then record full payment before shipping.” The shipment boxes stay greyed out.",
+      "The database enforces this too, so no screen can skip it. A draft invoice, another order's invoice, a partial payment or a credit doesn't unlock shipping.",
     ],
   },
   {
@@ -214,7 +216,7 @@ const missions: Mission[] = [
     prompt: "Open “Create Customer Invoice” and click “Create draft invoice” for SO-00029. Leave the invoice date as today.",
     check: (e) => (e.type !== "invoice-create" ? undefined : e.order.number === 29 ? null : `${soNumber(e.order.number)} belongs to ${e.order.customer}. Create the invoice for Harbour View's SO-00029.`),
     learn: [
-      "Luna confirmed: “Draft order invoice saved. Review it, click Record invoice in accounts, then record a customer payment before shipping.”",
+      "Luna confirmed: “Draft order invoice saved. Review it, click Record invoice in accounts, then record full customer payment before shipping.”",
       "INV-00032 copies SO-00029's GYD prices with no exchange rate. The due date is 15 days after the invoice date, from Harbour View's payment terms.",
     ],
   },
@@ -263,13 +265,36 @@ const missions: Mission[] = [
   },
   {
     kind: "choice",
-    prompt: "Harbour View has paid less than half of INV-00032. Can SO-00029 ship now?",
+    prompt: "Harbour View has paid GYD 50000.00 of INV-00032's GYD 113500.00. Can SO-00029 ship now?",
     options: [
-      { text: "No. The invoice must be paid in full first", correct: false, why: "Not quite. Luna's rule is that a positive payment recorded against the order's invoice enables shipping. A partial payment qualifies." },
-      { text: "Yes. A partial payment recorded against the order's invoice qualifies. A credit on its own would not", correct: true, why: "Correct. docs/customer-invoice-before-shipment.md: “A partial payment qualifies; credits alone do not.”" },
-      { text: "Yes, and it could have shipped as soon as the invoice was a draft", correct: false, why: "Not quite. A draft invoice never unlocks shipping. The invoice must be recorded and have a payment." },
+      { text: "Yes. Any payment recorded against the order's invoice unlocks shipping", correct: false, why: "Not quite. Luna now requires full payment. Customer Orders would say: “Shipment blocked: record full customer payment. Partial payments and credit notes do not qualify.”" },
+      { text: "No. The invoice must be paid in full first. Partial payments and credit notes don't qualify", correct: true, why: "Correct. Luna enables shipping only when the recorded customer payments equal the invoice total. Until then, Customer Orders shows “Shipment blocked: record full customer payment. Partial payments and credit notes do not qualify.”" },
+      { text: "Yes, if a Director marks the invoice as paid", correct: false, why: "Not quite. Changing a status by hand doesn't count. Only recorded customer payments that add up to the full invoice total unlock shipping." },
     ],
-    learn: ["Whether to ship before full payment is still a business decision. Luna only stops you shipping with no invoice or no payment at all."],
+    learn: ["Because goods only leave once the sale is fully paid, a later return is always settled as a refund to the customer (Lesson 7)."],
+  },
+  {
+    kind: "do",
+    prompt: "Harbour View has now sent the balance. Record it on INV-00032 and click “Save payment”.",
+    details: [
+      "Payment date: today (already filled in)",
+      "Amount received (GYD): 63500.00 (or 63,500.00), the “Remaining balance” Luna showed after the deposit",
+      "Deposit account: Republic Bank — Operating Account (GYD)",
+      "Payment method: Bank transfer",
+      "Reference: HVP-TRF-0207",
+    ],
+    check: (e) => {
+      if (e.type !== "payment") return undefined;
+      if (e.amount_cents !== 6350000) return `The balance is GYD 63500.00. You entered ${money(e.amount_cents)}. Anything less leaves the invoice partly paid, and shipping stays blocked.`;
+      if (e.bank !== "g1") return "The money went into Republic Bank — Operating Account (GYD). Choose that account.";
+      if (e.method !== "bank_transfer") return "Harbour View paid by bank transfer. Choose “Bank transfer” as the payment method.";
+      if (e.reference.trim().toUpperCase() !== "HVP-TRF-0207") return "Type the bank reference exactly: HVP-TRF-0207. It lets the bank statement be matched later.";
+      return null;
+    },
+    learn: [
+      "Luna confirmed: “GYD payment saved and confirmed. Remaining balance: GYD 0.00.” The status is now “Paid”.",
+      "The two payments together equal the invoice total, so shipping is now allowed.",
+    ],
   },
   {
     kind: "do",
@@ -282,7 +307,7 @@ const missions: Mission[] = [
     prompt: "Click “View order” for SO-00029 and read the message under “Record items shipped” again.",
     check: (e) => (e.type !== "order-view" ? undefined : e.order.number === 29 ? null : `${soNumber(e.order.number)} is ${e.order.customer}'s order. Open SO-00029.`),
     learn: [
-      "Luna now says: “Invoice recorded and payment recorded. Shipping is enabled.” The shipment boxes are unlocked.",
+      "Luna now says: “Invoice recorded and fully paid. Shipping is enabled.” The shipment boxes are unlocked.",
       "If the order was already open, “Refresh invoice and payment status” fetches the same check.",
     ],
   },
@@ -338,8 +363,8 @@ const missions: Mission[] = [
 // Where each hands-on task is done. Opening a different section during the task gets a hint.
 const missionArea: Record<number, string> = {
   1: "Customer Orders", 4: "Customer Orders",
-  6: "Invoices & Bills", 7: "Invoices & Bills", 9: "Invoices & Bills",
-  12: "Customer Orders", 13: "Customer Orders", 14: "Customer Orders",
+  6: "Invoices & Bills", 7: "Invoices & Bills", 9: "Invoices & Bills", 11: "Invoices & Bills",
+  13: "Customer Orders", 14: "Customer Orders", 15: "Customer Orders",
 };
 
 // Step-by-step help shown after the second unsuccessful try on a task (by task number).
@@ -367,14 +392,19 @@ const missionHelp: Record<number, string[]> = {
     "Type 50000.00 as the amount and choose “Republic Bank — Operating Account (GYD)”.",
     "Choose “Bank transfer”, type HVP-TRF-0193 as the reference, then click “Save payment”.",
   ],
-  11: ["Shipments are recorded in Customer Orders.", "Click “Customer Orders” in the left sidebar."],
-  12: ["If the Shipped Items tab is open, click the “Customer Orders” tab first.", "Click “View order” on the SO-00029 row."],
-  13: [
+  11: [
+    "The payment form is under “Record a customer payment” on INV-00032. Open the invoice with “View invoice” if it's closed.",
+    "Type 63500.00 as the amount and choose “Republic Bank — Operating Account (GYD)”.",
+    "Choose “Bank transfer”, type HVP-TRF-0207 as the reference, then click “Save payment”.",
+  ],
+  12: ["Shipments are recorded in Customer Orders.", "Click “Customer Orders” in the left sidebar."],
+  13: ["If the Shipped Items tab is open, click the “Customer Orders” tab first.", "Click “View order” on the SO-00029 row."],
+  14: [
     "Open SO-00029 with “View order” if it's closed.",
     "Under “Record items shipped”, type 30 in “Ship now” for NSM-GLOVE-M and 10 for JRS-GAUZE-4X4.",
     "Luna won't accept more than is in stock or still owed. Click “Save shipment”.",
   ],
-  14: ["The two tabs are at the top of Customer Orders.", "Click “Shipped Items”."],
+  15: ["The two tabs are at the top of Customer Orders.", "Click “Shipped Items”."],
 };
 
 type Feedback = { tone: "good" | "bad"; lines: string[]; help?: string[] } | null;
@@ -603,20 +633,21 @@ export default function DirectorLesson6Simulator() {
     });
   }
 
-  // database/customer-invoice-before-shipment.sql get_luna_order_shipping_gate
+  // luna_private.paid_order_state() via get_luna_order_shipping_gate
+  // (supabase/migrations/20261103042803_paid_customer_return_refunds.sql): full payment is required.
   function shippingGate(order: Order): { can_ship: boolean; message: string; earliest?: string } {
     const invoice = invoices.find((i) => i.order_id === order.id);
-    if (!invoice) return { can_ship: false, message: "Create and record the customer invoice, then record a payment in Invoices & Bills before shipping." };
-    if (invoice.status === "draft") return { can_ship: false, message: "Record the draft customer invoice in accounts, then record a payment before shipping." };
-    if (!invoice.payments.length) return { can_ship: false, message: "Record a customer payment against this invoice before shipping. Credits do not count as payment." };
-    const firstPayment = invoice.payments.map((p) => p.date).sort()[0];
-    return { can_ship: true, message: "Invoice recorded and payment recorded. Shipping is enabled.", earliest: firstPayment > invoice.date ? firstPayment : invoice.date };
+    if (!invoice || invoice.status === "draft") return { can_ship: false, message: "Create and record the customer invoice, then record full payment before shipping." };
+    const paid = invoice.payments.reduce((sum, p) => sum + p.amount_cents, 0);
+    if (paid !== invoice.total_cents) return { can_ship: false, message: "Shipment blocked: record full customer payment. Partial payments and credit notes do not qualify." };
+    const lastPayment = invoice.payments.map((p) => p.date).sort().slice(-1)[0];
+    return { can_ship: true, message: "Invoice recorded and fully paid. Shipping is enabled.", earliest: lastPayment > invoice.date ? lastPayment : invoice.date };
   }
 
   function recordShipment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedOrder) return;
-    if (notYet(13)) return;
+    if (notYet(14)) return;
     setShipNotice("");
     try {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(shipDate)) throw new Error("Enter the shipment date as YYYY-MM-DD.");
@@ -676,7 +707,7 @@ export default function DirectorLesson6Simulator() {
         setTab("customers");
         setSelectedInvoiceId(invoice.id);
         resetPayment();
-        setNotice("Draft order invoice saved. Review it, click Record invoice in accounts, then record a customer payment before shipping.");
+        setNotice("Draft order invoice saved. Review it, click Record invoice in accounts, then record full customer payment before shipping.");
         toTop();
       });
     } catch (error) {
@@ -704,13 +735,14 @@ export default function DirectorLesson6Simulator() {
     event.preventDefault();
     if (!selectedInvoice) return;
     if (notYet(9)) return;
-    if (step > 9 || (step === 9 && advanceReady)) {
+    if (step === 10 && notYet(11)) return;
+    if ((step !== 9 && step !== 11) || advanceReady) {
       const lines = [
-        "This lesson's payment is already recorded, so this one wasn't saved.",
+        "This lesson's payments are already recorded, so this one wasn't saved.",
         "Luna doesn't let you edit or delete a saved customer payment. A payment saved by mistake needs a Director's reviewed correction, so check every field before you click “Save payment”.",
       ];
-      setNotice("Payment not saved. This lesson's payment is already recorded.");
-      setFeedback({ tone: "bad", lines: [...lines, ...(mission && !(step === 9 && advanceReady) ? [`Current task: ${mission.prompt}`] : [])] });
+      setNotice("Payment not saved. This lesson's payments are already recorded.");
+      setFeedback({ tone: "bad", lines: [...lines, ...(mission && !advanceReady ? [`Current task: ${mission.prompt}`] : [])] });
       return;
     }
     setNotice("");
@@ -799,7 +831,7 @@ export default function DirectorLesson6Simulator() {
               </form>
               <p style={{ fontSize: 13 }}><strong>Estimated total:</strong> {estimatedTotal === null ? "Complete all items" : money(estimatedTotal)}</p>
               {notice && !selectedOrder && <p className={`lsim-status ${isError(notice) ? "error" : ""}`} role="status">{notice}</p>}
-              <p className="lsim-foot">Final prices are checked against saved product records when you save. Taxes and discounts are not included yet. Draft orders do not reserve stock. Create and record the invoice and a customer payment before shipment. Shipping reduces stock and records the related delivery accounting. Pharmaceutical ordering will follow its authorization and tracing controls.</p>
+              <p className="lsim-foot">Final prices are checked against saved product records when you save. Taxes and discounts are not included yet. Draft orders do not reserve stock. Create and record the invoice and full customer payment before shipment. Shipping reduces stock and records the related delivery accounting. Pharmaceutical ordering will follow its authorization and tracing controls.</p>
             </section>
 
             <section className="lsim-module">
@@ -968,7 +1000,7 @@ export default function DirectorLesson6Simulator() {
     return (
       <section className="lsim-module">
         <h2>Create a draft customer invoice</h2>
-        <p>Create the invoice from a saved customer order before shipment. Record it in accounts, then record a customer payment to unlock shipping. A partial payment qualifies. Saving a draft does not change stock or account balances.</p>
+        <p>Create the invoice from a saved customer order before shipment. Record it in accounts, then record full customer payment to unlock shipping. Partial payments do not qualify. Saving a draft does not change stock or account balances.</p>
         <div className="lsim-form"><label style={{ maxWidth: 260, display: "block" }}>Invoice date<input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></label></div>
         <p style={{ fontSize: 13 }}>New customer orders are priced in GYD. Their saved prices carry directly to the invoice without currency conversion.</p>
         <h3 style={{ fontSize: 15, margin: "10px 0 4px" }}>Customer orders ready to invoice</h3>
@@ -1054,7 +1086,7 @@ export default function DirectorLesson6Simulator() {
         </div>
         <p style={{ fontSize: 13 }}>{invoice.status === "draft"
           ? "The invoice is still a draft and has not changed account balances. Missing acquisition costs do not prevent recording."
-          : "Invoice recorded. Record a customer payment before shipment. The undelivered value is held in Customer Orders Awaiting Delivery; sales and stock cost are recorded as goods ship."}</p>
+          : "Invoice recorded. Record full customer payment before shipment. The undelivered value is held in Customer Orders Awaiting Delivery; sales and stock cost are recorded as goods ship."}</p>
         {notice && <p className={`lsim-status ${isError(notice) ? "error" : ""}`} role="status">{notice}</p>}
 
         <h3 style={{ fontSize: 15, margin: "12px 0 4px" }}>Payment history</h3>
@@ -1155,7 +1187,7 @@ export default function DirectorLesson6Simulator() {
         {finished ? (
           <div className="lsim-feedback good" style={{ gridColumn: "1 / -1" }}>
             <p><strong>Lesson 6 complete.</strong></p>
-            <p>You can now enter a customer order in GYD, create and record its invoice, record a partial payment into a GYD bank account, and ship only what is in stock. You can also explain why an order, an invoice, a payment and a shipment are separate records, and write a customer update that doesn&apos;t promise an unconfirmed delivery.</p>
+            <p>You can now enter a customer order in GYD, create and record its invoice, record payments into a GYD bank account until the invoice is paid in full, and only then ship what is in stock. You can also explain why an order, an invoice, a payment and a shipment are separate records, and write a customer update that doesn&apos;t promise an unconfirmed delivery.</p>
             <p>Next: Lesson 7 covers customer returns, credits and refunds.</p>
             <p role="status">
               {saveStatus === "saving" && "Saving your completion…"}

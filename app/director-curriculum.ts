@@ -101,7 +101,7 @@ export const directorCurriculum = {
       steps: [
         "Review return eligibility against the original sale and shipped quantities.",
         "Distinguish the return request from physical receiving and inspection.",
-        "Separate the restocking decision from credit and refund decisions.",
+        "Separate the restocking decision from the Director-approved refund credit and the actual refund payment.",
         "Identify the required approval and accounting reviews.",
         "Follow the supporting document trail through the return.",
       ],

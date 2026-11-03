@@ -246,6 +246,7 @@ const missions: Mission[] = [
       "Deposit account: Republic Bank — Operating Account (GYD)",
       "Payment method: Bank transfer",
       "Reference: HVP-TRF-0193",
+      "Check the amount, account, method and reference before you click “Save payment”. A saved payment can't be edited or deleted.",
     ],
     check: (e) => {
       if (e.type !== "payment") return undefined;
@@ -703,6 +704,15 @@ export default function DirectorLesson6Simulator() {
     event.preventDefault();
     if (!selectedInvoice) return;
     if (notYet(9)) return;
+    if (step > 9 || (step === 9 && advanceReady)) {
+      const lines = [
+        "This lesson's payment is already recorded, so this one wasn't saved.",
+        "Luna doesn't let you edit or delete a saved customer payment. A payment saved by mistake needs a Director's reviewed correction, so check every field before you click “Save payment”.",
+      ];
+      setNotice("Payment not saved. This lesson's payment is already recorded.");
+      setFeedback({ tone: "bad", lines: [...lines, ...(mission && !(step === 9 && advanceReady) ? [`Current task: ${mission.prompt}`] : [])] });
+      return;
+    }
     setNotice("");
     try {
       if (!payBank) throw new Error("Choose an active GYD bank account.");

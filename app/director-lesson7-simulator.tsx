@@ -219,7 +219,7 @@ const missions: Mission[] = [
     },
     learn: [
       "A return always starts from the original order. Luna only lists orders with a recorded invoice, because the return has to be matched to what was billed and shipped.",
-      "Riverside's invoice INV-00030 totals GYD 63500.00 and is paid in full. Luna only lets goods ship once the invoice is fully paid, so every return you handle is on a sale the customer has already paid for.",
+      "Riverside's invoice INV-00030 totals GYD 63500.00 and is paid in full. This lesson covers fully paid native-GYD customer invoices. Legacy invoices require separately reviewed handling.",
     ],
   },
   {
@@ -316,7 +316,7 @@ const missions: Mission[] = [
     prompt: "The “Lot TR-LOT-0231” box now reads “Not eligible for resale. Financial settlement can be reviewed separately.” What does that mean?",
     options: [
       { text: "Luna has recorded the boxes as thrown away", correct: false, why: "Not quite. Luna's inspection screen says “Ineligible” does not record disposal. Disposal is handled separately." },
-      { text: "They stay quarantined and won't go back into stock, but Riverside can still get its money back", correct: true, why: "Correct. The decision only controls restocking. Any decision other than “Keep on hold” unlocks “Review refund credit” and “Record customer refund”." },
+      { text: "They stay quarantined and won't go back into stock, but Riverside can still get its money back", correct: true, why: "Correct. A final inspection permits financial review; it does not approve compensation. Prepare the refund credit, obtain Director approval in Director Approval → Customer credits, and only then record a payment that actually occurred." },
       { text: "Riverside can't get anything back because the goods can't be resold", correct: false, why: "Not quite. Whether you can resell the goods and whether the customer gets money back are separate questions. That's why the box still shows “Review refund credit”." },
     ],
     learn: ["“Ineligible for restock” is about the goods. Paying the customer back is decided separately, in step 3."],
@@ -343,7 +343,7 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "Luna opened “2. Director approval” just below “Refund credit history”. Tick “I approve this return credit and the amount EMS owes the customer.” and click “Approve refund credit”.",
+    prompt: "Open “Director Approval”, choose “Customer credits”, and find Riverside Family Clinic’s RCN-00001 for GYD 10950.00. Click “Review customer credit”, check the details, tick the approval confirmation and click “Approve and post customer credit”. Luna then returns you to Customer Returns.",
     check: (e) => {
       if (e.type !== "credit-post") return undefined;
       if (e.credit.receipt_id !== RIVERSIDE_RECEIPT) return "Approve the refund credit for Riverside's syringes (RCN-00001).";
@@ -449,12 +449,12 @@ const missions: Mission[] = [
   },
   {
     kind: "do",
-    prompt: "St. Jude paid INV-00031 in full, so they're owed GYD 8100.00. In the same “Lot TR-LOT-0238” box, click “Review refund credit”. Under “1. Prepare refund credit”, save the refund credit, then approve it under “2. Director approval”.",
+    prompt: "St. Jude paid INV-00031 in full, so they're owed GYD 8100.00. In the same “Lot TR-LOT-0238” box, click “Review refund credit”. Under “1. Prepare refund credit”, save the refund credit. Open Director Approval → Customer credits, review St. Jude’s saved credit and confirm “Approve and post customer credit”. Luna then returns you to Customer Returns.",
     details: [
       "Refund credit amount (GYD): Luna already filled in 8100.00, which is 6 boxes × GYD 1350.00",
       "Reason for refund credit: at least 10 characters, for example “Refund for 6 unopened boxes of gauze returned.”",
       "Click “Save refund credit for Director”",
-      "Then tick “I approve this return credit and the amount EMS owes the customer.” and click “Approve refund credit”",
+      "Then open Director Approval → Customer credits, find St. Jude’s draft, click “Review customer credit”, tick the approval confirmation and click “Approve and post customer credit”",
     ],
     check: (e) => {
       if (e.type === "credit-prepare") {
@@ -667,6 +667,7 @@ export default function DirectorLesson7Simulator() {
   const [settleNotice, setSettleNotice] = useState("");
   const [creditValue, setCreditValue] = useState("");
   const [creditReason, setCreditReason] = useState("");
+  const [approvalCreditsOpen, setApprovalCreditsOpen] = useState(false);
   const [chosenCredit, setChosenCredit] = useState<string | null>(null);
   const [creditConfirmed, setCreditConfirmed] = useState(false);
   const [payCreditId, setPayCreditId] = useState("");
@@ -1040,8 +1041,10 @@ export default function DirectorLesson7Simulator() {
   /* ----- 2. Director approval (post_luna_paid_return_credit / cancel_luna_paid_return_credit) ----- */
 
   function creditAction(kind: "post" | "cancel", rc: Receipt) {
+    if (kind === "post" && (active !== "Director Approval" || !approvalCreditsOpen)) { setSettleNotice("Open Director Approval → Customer credits to approve this credit."); return; }
     const credit = credits.find((c) => c.id === chosenCredit);
     if (!credit) { setSettleNotice("Choose a saved credit draft."); return; }
+    if (credit.receipt_id !== rc.id || credit.status !== "draft") { setSettleNotice("Choose the matching saved credit draft."); return; }
     if (kind === "cancel") {
       setCredits((prev) => prev.map((c) => (c.id === credit.id ? { ...c, status: "cancelled" } : c)));
       setChosenCredit(null); setCreditConfirmed(false);
@@ -1053,6 +1056,7 @@ export default function DirectorLesson7Simulator() {
     if (notYet(creditTask(rc) + (rc.id === SJ_RECEIPT ? 0 : 1))) return;
     if (!creditConfirmed) { setSettleNotice("Director confirmation is required."); return; }
     attempt({ type: "credit-post", credit }, () => {
+      setActive("Customer Returns"); setApprovalCreditsOpen(false); setCreditConfirmed(false);
       setCredits((prev) => prev.map((c) => (c.id === credit.id ? { ...c, status: "recorded" } : c)));
       setChosenCredit(null); setCreditConfirmed(false);
       setSettleNotice("Refund credit approved. EMS now owes this amount to the customer. Record the refund only after payment.");
@@ -1469,12 +1473,12 @@ export default function DirectorLesson7Simulator() {
         )) : <p>No refund credit has been prepared for this receipt.</p>}
 
         {chosen && (
-          <section className="lsim-sub" aria-label="2. Director approval">
-            <h4>2. Director approval</h4>
+          <section className="lsim-panel">
+            <h4>Awaiting Director approval</h4>
             <p>{money(chosen.amount_cents)} — {chosen.reason}</p>
-            <label className="lsim-check"><input type="checkbox" checked={creditConfirmed} onChange={(e) => setCreditConfirmed(e.target.checked)} /> I approve this return credit and the amount EMS owes the customer.</label>
+            <p>Approval is completed in Director Approval → Customer credits. No payment or stock release has occurred.</p>
             <div className="lsim-actions">
-              <button type="button" className="lsim-pbtn" disabled={!creditConfirmed} onClick={() => creditAction("post", rc)}>Approve refund credit</button>
+              <button type="button" className="lsim-pbtn" onClick={() => { setCreditConfirmed(false); setChosenCredit(null); setApprovalCreditsOpen(false); setSettleNotice(""); setActive("Director Approval"); }}>Open Director Approval — Customer credits</button>
               <button type="button" className="lsim-sbtn" onClick={() => creditAction("cancel", rc)}>Cancel credit draft</button>
             </div>
           </section>
@@ -1561,7 +1565,40 @@ export default function DirectorLesson7Simulator() {
     );
   }
 
+  function renderCreditApprovals() {
+    const selected = credits.find(c => c.id === chosenCredit && c.status === "draft");
+    const receipt = selected ? receipts.find(r => r.id === selected.receipt_id) : undefined;
+    const invoice = selected ? seedInvoices.find(i => i.id === selected.invoice_id) : undefined;
+    return <section className="lsim-panel">
+      <h2>Director Approval</h2>
+      <div className="lsim-actions">
+        <button type="button" className="lsim-pbtn" aria-pressed={approvalCreditsOpen} onClick={() => { setApprovalCreditsOpen(true); setChosenCredit(null); setCreditConfirmed(false); }}>Customer credits</button>
+        <button type="button" className="lsim-sbtn" onClick={() => { setCreditConfirmed(false); setActive("Customer Returns"); }}>Return to Customer Returns</button>
+      </div>
+      {approvalCreditsOpen && <>
+        <h3>Customer credits</h3>
+        <p>Review and approve a saved refund credit. Approval creates a refund payable; it does not move money or release stock.</p>
+        <div className="lsim-actions">{credits.filter(c => c.status === "draft").map(c => <section className="lsim-panel" key={c.id}>
+          <p>{seedInvoices.find(i => i.id === c.invoice_id)?.customer} — RCN-{String(c.number).padStart(5, "0")} — {c.date} — {money(c.amount_cents)}</p>
+          <button type="button" className="lsim-sbtn" onClick={() => { setChosenCredit(c.id); setCreditConfirmed(false); setSettleNotice(""); }}>Review customer credit</button>
+        </section>)}</div>
+        {!credits.some(c => c.status === "draft") && <p>No pending refund credits.</p>}
+        {selected && receipt && invoice && <section className="lsim-panel">
+          <h4>Review customer credit — RCN-{String(selected.number).padStart(5, "0")}</h4>
+          <p>{invoice.customer} — {soNumber(invoice.so)} — {invNumber(invoice.number)}</p>
+          <p>Returned lot: {receipt.lot}. Quantity: {receipt.quantity}. Latest inspection: {receipt.inspections.length ? disposition(receipt.inspections[receipt.inspections.length - 1].decision) : "Awaiting inspection"}.</p>
+          <p>{money(selected.amount_cents)} — {selected.reason}</p>
+          <p>Dr 4100 Sales returns / Cr 2300 Customer refunds payable. The paid invoice, stock and bank balance do not change.</p>
+          <label className="lsim-check"><input type="checkbox" checked={creditConfirmed} onChange={e => setCreditConfirmed(e.target.checked)} /> I approve this return credit and the amount EMS owes the customer.</label>
+          <button type="button" className="lsim-pbtn" disabled={!creditConfirmed} onClick={() => creditAction("post", receipt)}>Approve and post customer credit</button>
+        </section>}
+        {settleNotice && <p role="status">{settleNotice}</p>}
+      </>}
+    </section>;
+  }
+
   function renderContent() {
+    if (active === "Director Approval") return renderCreditApprovals();
     if (active === "Home") {
       return (
         <>
